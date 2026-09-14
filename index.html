@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Blockscraper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Limelight&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <header id="topbar">
+    <button id="btn-drawer" class="icon-btn narrow-only" title="Blocks & styles" aria-label="Toggle blocks panel"><i data-icon="panel-left"></i></button>
+    <div class="brand"><span class="brand-full">BLOCKSCRAPER</span><span class="brand-short">B</span></div>
+    <div class="stats">
+      <div class="stat" title="Funds"><i data-icon="wallet"></i><span id="s-money">$0</span></div>
+      <div class="stat s-income" title="Income per day"><i data-icon="trending-up"></i><span id="s-income">$0</span></div>
+      <div class="stat s-pop" title="Population"><i data-icon="users"></i><span id="s-pop">0</span></div>
+      <div class="stat s-day" title="Time"><i data-icon="clock"></i><span id="s-day">Day 1</span></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Game speed">
+      <button data-speed="0" title="Pause (Space)" aria-label="Pause"><i data-icon="pause"></i></button>
+      <button data-speed="1" title="Normal speed" aria-label="Normal speed"><i data-icon="play"></i></button>
+      <button data-speed="4" title="Fast" aria-label="Fast"><i data-icon="chevrons-right"></i></button>
+      <button data-speed="12" title="Fastest" aria-label="Fastest"><i data-icon="fast-forward"></i></button>
+    </div>
+    <button id="btn-new" class="pill" title="Start a new city"><i data-icon="map-plus"></i><span class="t">New city</span></button>
+    <div class="menu-wrap">
+      <button id="btn-more" class="icon-btn" title="More" aria-label="More options" aria-haspopup="menu" aria-expanded="false"><i data-icon="ellipsis"></i></button>
+      <div id="menu" class="panel menu hidden" role="menu">
+        <button id="btn-info" class="narrow-info" role="menuitem"><i data-icon="panel-right"></i><span>Building info</span></button>
+        <button id="btn-eggs" role="menuitem"><i data-icon="egg"></i><span>Easter eggs</span><b id="eggs-count">0/14</b></button>
+        <button id="btn-sandbox" role="menuitemcheckbox" aria-checked="false"><i data-icon="infinity"></i><span>Sandbox · unlimited funds</span><i data-icon="check" class="tick"></i></button>
+        <button id="btn-quality" role="menuitemcheckbox" aria-checked="true" title="High detail adds ambient occlusion and sharper rendering"><i data-icon="sparkles"></i><span>High detail rendering</span><i data-icon="check" class="tick"></i></button>
+        <div class="menu-sep"></div>
+        <button id="btn-help" role="menuitem"><i data-icon="circle-help"></i><span>Help &amp; shortcuts</span><kbd>H</kbd></button>
+      </div>
+    </div>
+  </header>
+
+  <aside id="palette" class="panel">
+    <div class="tools">
+      <button data-tool="build"><i data-icon="hammer"></i>Build <kbd>B</kbd></button>
+      <button data-tool="erase"><i data-icon="eraser"></i>Erase <kbd>X</kbd></button>
+      <button data-tool="paint"><i data-icon="paintbrush"></i>Paint <kbd>P</kbd></button>
+      <button data-tool="inspect"><i data-icon="mouse-pointer-2"></i>Select <kbd>I</kbd></button>
+    </div>
+    <div class="brush-wrap"><span class="lbl">Current brush</span><div id="brush" class="brush"></div></div>
+    <h3>1 · Architectural style &amp; colorway</h3>
+    <div id="styles" class="accs"></div>
+    <h3>2 · Building blocks</h3>
+    <div id="blocks" class="accs"></div>
+    <h3>3 · Map blocks</h3>
+    <div class="brush-size" role="group" aria-label="Map brush size">
+      <span class="lbl">Brush</span>
+      <button data-brush="1">1×1</button><button data-brush="3">3×3</button><button data-brush="5">5×5</button><button data-brush="7">7×7</button>
+    </div>
+    <div id="mapblocks" class="accs"></div>
+  </aside>
+
+  <aside id="info" class="panel">
+    <div class="lotline"><span id="b-lot"></span><span id="b-stars" class="stars"></span><button id="info-close" class="icon-btn narrow-info" aria-label="Close building info"><i data-icon="x"></i></button></div>
+    <input id="b-name" spellcheck="false" aria-label="Building name">
+    <div class="rows" id="b-rows"></div>
+    <div id="b-warn"></div>
+    <div id="b-next"></div>
+    <div class="btnrow">
+      <button id="btn-stack"><i data-icon="arrow-up-from-line"></i>Stack floor <kbd>R</kbd></button>
+      <button id="btn-restyle"><i data-icon="paint-roller"></i>Restyle all</button>
+    </div>
+    <div class="btnrow">
+      <button id="btn-prev"><i data-icon="chevron-left"></i>Previous</button>
+      <button id="btn-next">Next<i data-icon="chevron-right"></i></button>
+    </div>
+    <div id="inspect"></div>
+  </aside>
+
+  <div id="viewbar" class="panel">
+    <button id="v-cut" title="Cutaway (F)"><i data-icon="scissors"></i><span class="t">Cutaway</span><kbd>F</kbd></button>
+    <button id="v-ug" title="Underground (U)"><i data-icon="pickaxe"></i><span class="t">Underground</span><kbd>U</kbd></button>
+    <button id="v-iso" title="Show only the selected building (O)"><i data-icon="crosshair"></i><span class="t">Focus</span><kbd>O</kbd></button>
+    <button id="v-frame" title="Fly the camera to the selected building (Z)"><i data-icon="scan"></i><kbd>Z</kbd></button>
+    <div class="ctl" title="Build level (Q / E)">
+      <i data-icon="layers"></i>
+      <button id="wl-down" aria-label="Build level down (Q)"><i data-icon="chevron-down"></i></button><b id="wl">Street</b><button id="wl-up" aria-label="Build level up (E)"><i data-icon="chevron-up"></i></button>
+    </div>
+    <div class="ctl" title="Show floors up to (PgUp / PgDn)">
+      <span class="t">Show</span>
+      <input type="range" id="cut" min="-4" max="60" value="60" aria-label="Show floors up to"><b id="cut-l">All</b>
+    </div>
+    <button id="v-hood" title="City view (N)"><i data-icon="map"></i><span class="t">City</span><kbd>N</kbd></button>
+  </div>
+
+  <div id="newcity" class="modal hidden">
+    <div class="panel modal-card">
+      <h2>Start a new city</h2>
+      <p class="muted">Your current city will be replaced.</p>
+      <div class="tpls">
+        <button class="tpl" data-tpl="blank"><i data-icon="grid-3x3" class="big"></i><b>Blank plots</b><small>Empty city blocks and streets — build everything yourself.</small></button>
+        <button class="tpl" data-tpl="random"><i data-icon="dices" class="big"></i><b>Random city</b><small>A procedurally generated skyline of mixed styles, parks and transit.</small></button>
+        <button class="tpl on" data-tpl="classic"><i data-icon="landmark" class="big"></i><b>Classic neighborhood</b><small>The Aurora, Meridian One and friends, plus gardens and plazas from around the world.</small></button>
+      </div>
+      <div class="opts">
+        <label>Map size<select id="nc-map"></select></label>
+        <label>City block size<select id="nc-lots"></select></label>
+        <label>Plot size<select id="nc-plot"></select></label>
+      </div>
+      <p class="muted small">Buildings and parks can span plots freely within a city block — there's no footprint or depth limit.</p>
+      <div class="btnrow"><button id="nc-cancel">Cancel</button><button id="nc-go" class="primary">Create city</button></div>
+    </div>
+  </div>
+
+  <div id="eggs" class="panel popover hidden"></div>
+  <div id="loading" class="panel hidden">Building the city…</div>
+
+  <div id="help" class="panel popover hidden">
+    <h4>How to build</h4>
+    <ul>
+      <li>Open a <b>style</b>, choose a <b>colorway</b>, then pick a <b>block</b>.</li>
+      <li><b>Click</b> a plot or block face to place. <b>Shift+click</b> fills the plot · <b>Ctrl/⌘+Shift+click</b> fills the whole city block.</li>
+      <li>Buildings join automatically when blocks touch — build across plots, as wide and as deep as you like.</li>
+      <li><b>Double-click</b> (or Select tool) chooses a building · <b>Tab</b> cycles · <b>Z</b> frames it · <b>O</b> focuses on it alone.</li>
+      <li><b>Alt+click</b> copies a block's type and style · <b>R</b> stacks the top floor.</li>
+      <li><b>Q / E</b> build level (any depth) · <b>PgUp / PgDn</b> slice floors · <b>F</b> cutaway · <b>U</b> underground · <b>N</b> city view.</li>
+    </ul>
+    <h4>Rules</h4>
+    <ul>
+      <li>Upper floors need a <b>Grand Lobby</b> and an <b>Elevator Core</b> column from the street.</li>
+      <li>Each <b>Foundation Pile</b> lets a building rise 3 more floors.</li>
+      <li>Subway platforms (B2) and bus bays touch an east–west street; rail platforms (B4) touch the red rail street.</li>
+      <li><b>Map blocks</b> shape empty plots: paint land cover or water, and raise, lower or level the ground with the brush. Buildings need dry, level land.</li>
+      <li><b>Land</b> map blocks grow the ground out past the map edge; <b>Streets &amp; paths</b> add roads, bike paths, boulevards and parking — buildings open onto them.</li>
+      <li><b>Entries &amp; Terraces</b> dress a street frontage: café terraces, stoops, grand stairs, porticos and arcades take the chosen style.</li>
+      <li>Parks and scenic terrain give nearby buildings +10% income. Fill a whole plot with one park type to get its full layout — basins, parterres and piazzas grow with the space.</li>
+      <li>Some block combinations hide <b>easter eggs</b> <i data-icon="egg"></i>.</li>
+    </ul>
+  </div>
+
+  <div id="tooltip" hidden></div>
+  <div id="toasts"></div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
