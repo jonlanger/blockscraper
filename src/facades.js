@@ -36,7 +36,7 @@ export function facadeContext(F, S, styleId, c, g, place) {
   const meta = META[styleId] || META.deco;
   const pal = (v, fallback) => (v === undefined ? fallback : typeof v === 'string' ? S[v] : v);
   const X = {
-    F, S, c, g, meta,
+    F, S, c, g, meta, style: styleId,
     W: [S.wall, meta.pat],
     colors: {
       wall: S.wall, trim: S.trim, accent: S.accent, glass: S.glass, roof: S.roof,
@@ -54,6 +54,8 @@ export function facadeContext(F, S, styleId, c, g, place) {
       }
       place(part, F.matrix(u, v, w, rotZ, rotX), X.colors, X.glass(k, frac));
     },
+    // Part at an arbitrary wall-space matrix (e.g. turned about the vertical).
+    PM(part, m, k = 0, frac) { place(part, m, X.colors, X.glass(k, frac)); },
     box(mat, u0, u1, v0, v1, w0, w1, surf, bev = 0) {
       if (bev) F.bev(g[mat], u0, u1, v0, v1, w0, w1, surf, bev);
       else F.rect(g[mat], u0, u1, v0, v1, w0, w1, surf);

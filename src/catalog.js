@@ -89,6 +89,7 @@ export const CATEGORIES = [
   { id: 'floors',  name: 'Floors',          icon: 'building' },
   { id: 'sky',     name: 'Sky Levels',      icon: 'cloud' },
   { id: 'top',     name: 'Roofs & Crowns',  icon: 'crown' },
+  { id: 'ornament', name: 'Structures & Sculpture', icon: 'landmark' },
   { id: 'transit', name: 'Transit',         icon: 'train-front' },
   { id: 'parks',   name: 'Parks & Plazas',  icon: 'trees' },
 ];
@@ -182,6 +183,16 @@ export const MODULES = Object.fromEntries([
   R('coolingtower',{ name: 'Cooling Towers',    icon: 'factory', cost: 20000, desc: 'Industrial fans and louvres.' }),
   R('watertower',  { name: 'Water Tower',       icon: 'cylinder', cost: 9000, desc: 'Timber tank on steel legs.' }),
   R('roofgarden',  { name: 'Roof Garden',       icon: 'leaf', cost: 12000, desc: 'Planters, pergola and trees.' }),
+  R('roofstatue',  { name: 'Crowning Statue',   icon: 'star', cats: ['top', 'ornament'], cost: 38000, desc: 'A gilded winged figure on a colonnaded drum.' }),
+  R('urns',        { name: 'Balustrade & Urns', icon: 'fence', cats: ['top', 'ornament'], cost: 12000, desc: 'Roof-edge balustrade with urns on pedestals. Joins with neighbors.' }),
+  R('obelisk',     { name: 'Rooftop Obelisk',   icon: 'pyramid', cats: ['top', 'ornament'], cost: 24000, desc: 'Granite needle with a gilded pyramidion.' }),
+
+  // Structures & sculpture. Skybridges hang off a neighboring building instead of needing a block below.
+  M('skybridge',   { name: 'Skybridge',         icon: 'route', cats: ['ornament', 'sky'], cost: 60000, min: 1, max: MAX_LEVEL, open: true, bridge: true, deck: 0.6, floor: 0x8a8f96, desc: 'Enclosed walkway spanning the gap between towers — it hangs from a building beside it. Joined towers share elevators.' }),
+  M('pillars',     { name: 'Pillared Loggia',   icon: 'landmark', cats: ['ornament', 'street', 'floors'], cost: 14000, min: 0, max: MAX_LEVEL - 1, open: true, pop: 3, needsCore: false, deck: 0.1, floor: 0x9e9a92, desc: 'Open colonnade in the style’s order — arches, pilotis or tree columns. Build floors on top of it.' }),
+  M('statue',      { name: 'Statue & Plinth',   icon: 'drama', cats: ['ornament', 'frontage'], cost: 18000, min: 0, max: MAX_LEVEL, open: true, pop: 2, needsCore: false, deck: 0.08, floor: 0x9e9a92, desc: 'A figure on a stepped pedestal: bronze, marble or gilt, depending on the style. Try one on a roof terrace.' }),
+  M('sculpture',   { name: 'Abstract Sculpture', icon: 'shapes', cats: ['ornament', 'frontage'], cost: 16000, min: 0, max: MAX_LEVEL, open: true, pop: 2, needsCore: false, deck: 0.08, floor: 0x9e9a92, desc: 'Polished ribbons, painted rings, balanced stones or a mirror bean — each one differs.' }),
+  M('monument',    { name: 'Monument Column',   icon: 'milestone', cats: ['ornament', 'frontage'], cost: 32000, min: 0, max: MAX_LEVEL, open: true, pop: 2, needsCore: false, deck: 0.08, floor: 0x9e9a92, desc: 'A 14 m victory column with a gilded figure. Leave the sky above it clear.' }),
 
   // Transit
   T('station',         { name: 'Subway Platform',   icon: 'train-front-tunnel', cats: ['transit', 'under'], cost: 90000, min: -2, max: -2, income: 1200, pop: 12, transit: 'subway', street: 'h', floor: 0xbdb7aa, desc: 'B2, touching an east–west street. Subway trains stop here.' }),
@@ -266,6 +277,34 @@ export const TERRAIN = Object.fromEntries([
   TR('level',    'elev',  { name: 'Level',             icon: 'equal',          cost: 400,  desc: 'Flatten back to street level so you can build.' }),
   TR('clear',    'elev',  { name: 'Clear Terrain',     icon: 'eraser',         cost: 0,    desc: 'Remove land cover, water and roads, back to a bare plot.' }),
 ].map((t) => [t.id, t]));
+
+// Facade ornaments attach to one exposed face of a solid above-ground block and take that block's style.
+// Stored per cell as c.o = [+x, -x, +z, -z]. min: lowest level. remove: strips the face instead.
+export const DECOR_GROUPS = [
+  { id: 'sculpture', name: 'Sculpture & Carving', icon: 'bird', blurb: 'Gargoyles, statues, friezes and clocks' },
+  { id: 'structure', name: 'Pillars & Projections', icon: 'columns-3', blurb: 'Giant columns, buttresses, bays and overhangs' },
+  { id: 'trim', name: 'Trim & Flourishes', icon: 'sparkles', blurb: 'Cornices, fins, neon, flags, ivy and lanterns' },
+];
+const DC = (id, group, o) => ({ id, group, min: 0, ...o });
+export const DECOR = Object.fromEntries([
+  DC('gargoyle', 'sculpture', { name: 'Gargoyles',        icon: 'bird',     cost: 6000,  desc: 'Winged stone grotesques with copper rain spouts. They lean out from corners.' }),
+  DC('niche',    'sculpture', { name: 'Canopied Statues', icon: 'church',   cost: 9000,  desc: 'Figures on corbels under canopies that suit the style.' }),
+  DC('caryatid', 'sculpture', { name: 'Caryatids',        icon: 'drama',    cost: 12000, desc: 'Robed figures carrying a stone ledge on their heads.' }),
+  DC('frieze',   'sculpture', { name: 'Sculpted Frieze',  icon: 'image',    cost: 5000,  desc: 'Relief band in the style’s motif: triglyphs, chevrons, quatrefoils or vines.' }),
+  DC('clock',    'sculpture', { name: 'Facade Clock',     icon: 'clock',    cost: 7000,  desc: 'A great illuminated clock in a carved surround.' }),
+  DC('columns',  'structure', { name: 'Giant Columns',    icon: 'columns-3', cost: 8000, desc: 'Freestanding columns and entablature. Stack several floors for a colossal order.' }),
+  DC('buttress', 'structure', { name: 'Buttresses',       icon: 'castle',   cost: 7000,  desc: 'Stepped piers with drip courses and pinnacles where they stop.' }),
+  DC('oriel',    'structure', { name: 'Oriel Bay',        icon: 'panel-right', cost: 9000, min: 1, desc: 'Projecting three-sided bay window on a corbel. Stack for a bay tower.' }),
+  DC('overhang', 'structure', { name: 'Deep Overhang',    icon: 'umbrella', cost: 6000,  desc: 'Cantilevered eave with brackets, rafters or struts and soffit lights.' }),
+  DC('balcony',  'structure', { name: 'Balcony Run',      icon: 'fence',    cost: 5000,  min: 1, desc: 'Full-width cantilevered balcony. Joins with neighbors.' }),
+  DC('fins',     'structure', { name: 'Sun Fins',         icon: 'layers',   cost: 4000,  desc: 'Deep vertical brise-soleil fins. Parametric towers twist them floor by floor.' }),
+  DC('cornice',  'trim',      { name: 'Grand Cornice',    icon: 'landmark', cost: 5000,  desc: 'Frieze, dentils, modillions and a crowning cornice with urns.' }),
+  DC('neon',     'trim',      { name: 'Neon Outline',     icon: 'lightbulb', cost: 3000, desc: 'Glowing tubes tracing the bay — speed lines on Streamline Moderne.' }),
+  DC('flags',    'trim',      { name: 'Flags & Banners',  icon: 'wind',     cost: 3500,  desc: 'An angled flagpole and two hanging banners.' }),
+  DC('ivy',      'trim',      { name: 'Ivy & Planters',   icon: 'leaf',     cost: 2500,  desc: 'Climbing ivy up the piers and a flower box.' }),
+  DC('lanterns', 'trim',      { name: 'Wall Lanterns',    icon: 'lamp',     cost: 2500,  desc: 'Lanterns on scrolled iron brackets.' }),
+  DC('bare',     'trim',      { name: 'Bare Wall',        icon: 'eraser',   cost: 0, remove: true, desc: 'Strip the ornaments from a face.' }),
+].map((d) => [d.id, d]));
 
 // Is this block see-through for facade purposes (neighbors draw walls toward it)?
 export function isHollow(cell) {

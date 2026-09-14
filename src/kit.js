@@ -298,19 +298,22 @@ export function doorPart(type, w = 1.2, h = 2.5) {
 }
 
 // ---------- columns & pilasters ----------
-export function columnPart(order, h, r = 0.18, slot = 'trim') {
-  return part(`col:${order}:${f2(h)}:${f2(r)}:${slot}`, (L) => {
+// base / cap false draw a plain shaft segment, so columns can stack into one colossal column.
+export function columnPart(order, h, r = 0.18, slot = 'trim', base = true, cap = true) {
+  const whole = base && cap;
+  return part(`col:${order}:${f2(h)}:${f2(r)}:${slot}${whole ? '' : `:${base}:${cap}`}`, (L) => {
     const s = L(order === 'castiron' ? 't' : 'm', slot);
-    const baseH = order === 'castiron' ? 0.25 : 0.3, capH = order === 'modern' ? 0.02 : order === 'doric' ? 0.28 : 0.4;
+    const baseH = !base || (order === 'modern' && !cap) ? 0 : order === 'castiron' ? 0.25 : 0.3;
+    const capH = !cap ? 0 : order === 'modern' ? 0.02 : order === 'doric' ? 0.28 : 0.4;
     const shaftH = h - baseH - capH;
-    if (order !== 'modern') {
+    if (base && order !== 'modern') {
       s.bv(-r * 1.45, 0, -r * 1.45, r * 1.45, baseH * 0.4, r * 1.45, 0.02);
       s.geo(lathe(`cbase:${f2(r)}`, [[r * 1.3, 0], [r * 1.32, 0.05], [r * 1.15, 0.1], [r * 1.05, 0.12], [r * 1.18, 0.16], [r * 1.02, baseH * 0.6], [0.001, baseH * 0.6]], 20), mtx(0, baseH * 0.4, 0));
     }
     // shaft with entasis and flutes
     const flutes = order === 'doric' || order === 'ionic' || order === 'corinthian' || order === 'castiron';
     const shaft = new THREE.LatheGeometry(
-      Array.from({ length: 9 }, (_, i) => { const t = i / 8; return new THREE.Vector2(r * (1 - 0.12 * Math.pow(t, 1.6)), t * shaftH); }), 24,
+      Array.from({ length: 9 }, (_, i) => { const t = i / 8; return new THREE.Vector2(r * (1 - (whole ? 0.12 : 0) * Math.pow(t, 1.6)), t * shaftH); }), 24,
     );
     if (flutes) {
       const p = shaft.attributes.position;
@@ -322,9 +325,10 @@ export function columnPart(order, h, r = 0.18, slot = 'trim') {
       shaft.computeVertexNormals();
     }
     s.geo(shaft, mtx(0, order === 'modern' ? 0 : baseH, 0));
-    const y = baseH + shaftH, rt = r * 0.88;
+    const y = baseH + shaftH, rt = r * (whole ? 0.88 : 1);
+    if (!cap) return;
     if (order === 'castiron') {
-      for (const yy of [baseH + 0.1, baseH + shaftH * 0.35]) s.geo(lathe(`cring:${f2(r)}`, [[r * 0.9, 0], [r * 1.15, 0.03], [r * 1.15, 0.07], [r * 0.9, 0.1]], 16), mtx(0, yy, 0));
+      if (base) for (const yy of [baseH + 0.1, baseH + shaftH * 0.35]) s.geo(lathe(`cring:${f2(r)}`, [[r * 0.9, 0], [r * 1.15, 0.03], [r * 1.15, 0.07], [r * 0.9, 0.1]], 16), mtx(0, yy, 0));
       s.geo(lathe(`ccap:${f2(r)}`, [[rt, 0], [rt * 1.3, 0.1], [rt * 1.8, 0.28], [rt * 1.8, 0.34], [0.001, 0.34]], 16), mtx(0, y, 0));
     } else if (order === 'doric') {
       s.geo(lathe(`dor:${f2(r)}`, [[rt, 0], [rt * 1.02, 0.04], [rt * 1.35, 0.14], [0.001, 0.14]], 20), mtx(0, y, 0));

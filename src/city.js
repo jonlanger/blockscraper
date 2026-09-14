@@ -1,6 +1,6 @@
 // City data: every block in one global grid. Buildings (and parks) are connected groups of
 // blocks, so they can span plots freely and grow to any size or depth.
-import { CELL, MAX_LEVEL, MODULES, STYLES, TERRAIN, levelName, DEEP, isHollow } from './catalog.js';
+import { CELL, MAX_LEVEL, MODULES, STYLES, TERRAIN, DECOR, levelName, DEEP, isHollow } from './catalog.js';
 import { tk, chunkKey } from './terrain.js';
 import { hash } from './geo.js';
 
@@ -12,6 +12,14 @@ const MODULE_INDEX = new Map(Object.keys(MODULES).map((id, i) => [id, i + 1]));
 // Changes whenever a park's blocks or block types change. Park layouts span their whole area, so any
 // change redraws every block of the park (not just the chunks around the edit).
 const parkSig = (list) => { let h = 0; for (const c of list) h = (h + Math.floor(hash(c.x, c.z, MODULE_INDEX.get(c.m)) * 4294967296)) % 4294967296; return `${list.length}:${h}`; };
+
+const EDIT_KINDS = ['cells', 'terrain', 'land', 'roads'];
+const snapshot = (kind, r) => {
+  if (!r) return null;
+  if (kind === 'cells') return { m: r.m, s: r.s, v: r.v || 0, b: r.b, o: r.o ? [...r.o] : null };
+  if (kind === 'terrain') return { t: r.t, h: r.h };
+  return kind === 'roads' ? r.t : true;
+};
 
 export class City {
   constructor(layout) {
@@ -45,8 +53,10 @@ export class City {
 
   set(x, y, z, m, s, v = 0) {
     const k = this.key(x, y, z);
+    this.touch('cells', k, [x, y, z]);
     const prev = this.cells.get(k);
     const c = { x, y, z, m, s, v, b: prev ? prev.b : 0 };
+    if (prev?.o && prev.m === m) c.o = prev.o; // restyling keeps the ornaments
     this.cells.set(k, c);
     const ck = this.chunkOf(x, z);
     if (!this.chunkCells.has(ck)) this.chunkCells.set(ck, new Set());
@@ -55,8 +65,41 @@ export class City {
     return c;
   }
 
+  // Facade ornament on side d (0:+x 1:-x 2:+z 3:-z) of a block; id null clears it.
+  setDecor(x, y, z, d, id) {
+    const c = this.get(x, y, z);
+    if (!c) return;
+    this.touch('cells', this.key(x, y, z), [x, y, z]);
+    const o = c.o ? [...c.o] : [null, null, null, null];
+    o[d] = id || null;
+    if (o.some(Boolean)) c.o = o; else delete c.o;
+    this.markAround(x, z);
+  }
+
+  // Does this skybridge hang from something — a building block beside it, or a chain of skybridges that
+  // reaches one (or stands on a block)? skip: a block key to treat as already removed.
+  bridgeHeld(x, y, z, skip = null) {
+    const seen = new Set([this.key(x, y, z)]), stack = [[x, z]];
+    while (stack.length) {
+      const [cx, cz] = stack.pop();
+      if (this.cells.has(this.key(cx, y - 1, cz))) return true;
+      for (const [dx, , dz] of N6.slice(0, 4)) {
+        const k = this.key(cx + dx, y, cz + dz);
+        if (k === skip || seen.has(k)) continue;
+        const n = this.cells.get(k);
+        if (!n) continue;
+        const m = MODULES[n.m];
+        if (!m.bridge) { if (!m.park && !m.topper) return true; continue; }
+        seen.add(k);
+        stack.push([n.x, n.z]);
+      }
+    }
+    return false;
+  }
+
   remove(x, y, z) {
     const k = this.key(x, y, z);
+    this.touch('cells', k, [x, y, z]);
     if (!this.cells.delete(k)) return;
     this.chunkCells.get(this.chunkOf(x, z))?.delete(k);
     this.markAround(x, z);
@@ -65,6 +108,7 @@ export class City {
   // Map blocks. rec = { t, h } or null to clear. Heights blend two blocks out, so redraw around it.
   setTerrain(x, z, rec) {
     const k = tk(x, z);
+    this.touch('terrain', k, [x, z]);
     if (rec) this.terrain.set(k, { x, z, t: rec.t, h: rec.h || 0 });
     else if (!this.terrain.delete(k)) return;
     for (let dx = -2; dx <= 2; dx += 2) for (let dz = -2; dz <= 2; dz += 2) this.terrainDirty.add(chunkKey(x + dx, z + dz));
@@ -73,6 +117,7 @@ export class City {
 
   setLand(x, z, on) {
     const k = tk(x, z);
+    this.touch('land', k, [x, z]);
     if (on) { if (this.land.has(k)) return; this.land.set(k, { x, z }); } else if (!this.land.delete(k)) return;
     this.layout.recalcExt();
     this.terrainVersion++;
@@ -81,10 +126,57 @@ export class City {
   // Roads join their neighbors and buildings open onto them, so redraw both around it.
   setRoad(x, z, t) {
     const k = tk(x, z);
+    this.touch('roads', k, [x, z]);
     if (t) this.roads.set(k, { x, z, t }); else if (!this.roads.delete(k)) return;
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) this.terrainDirty.add(chunkKey(x + dx, z + dz));
     this.markAround(x, z);
     this.terrainVersion++;
+  }
+
+  // ---------- undo history ----------
+  // Between beginEdit() and endEdit(), the first change to each block or map cell keeps its prior state.
+  // endEdit() pairs those with the current states into a reversible edit, or null if nothing changed.
+  beginEdit() {
+    this.rec = { cells: new Map(), terrain: new Map(), land: new Map(), roads: new Map(), names: new Map(this.names) };
+  }
+
+  touch(kind, k, pos) {
+    const r = this.rec;
+    if (r && !r[kind].has(k)) r[kind].set(k, { pos, before: snapshot(kind, this[kind].get(k)) });
+  }
+
+  endEdit() {
+    const r = this.rec;
+    this.rec = null;
+    if (!r) return null;
+    const edit = { names: [r.names, new Map(this.names)] };
+    let changes = 0;
+    for (const kind of EDIT_KINDS) {
+      edit[kind] = [];
+      for (const [k, { pos, before }] of r[kind]) {
+        const after = snapshot(kind, this[kind].get(k));
+        if (JSON.stringify(before) === JSON.stringify(after)) continue;
+        edit[kind].push([pos, before, after]);
+        changes++;
+      }
+    }
+    return changes ? edit : null;
+  }
+
+  // Put an edit's blocks and map cells back to their states before (side 0) or after (side 1) it.
+  applyEdit(edit, side) {
+    for (const [[x, y, z], ...states] of edit.cells) {
+      const st = states[side];
+      if (!st) { this.remove(x, y, z); continue; }
+      const c = this.set(x, y, z, st.m, st.s, st.v);
+      c.b = st.b;
+      if (st.o) c.o = [...st.o]; else delete c.o;
+    }
+    for (const [[x, z], ...states] of edit.land) this.setLand(x, z, !!states[side]);
+    for (const [[x, z], ...states] of edit.roads) this.setRoad(x, z, states[side]);
+    for (const [[x, z], ...states] of edit.terrain) this.setTerrain(x, z, states[side]);
+    this.recompute();
+    for (const [id, name] of edit.names[side]) if (this.buildings.has(id)) this.names.set(id, name);
   }
 
   clear() {
@@ -202,8 +294,10 @@ export class City {
       if (mod.street === 'rail' && (!t || t.band !== L.railBand)) return `${mod.name} must touch the rail street (red tunnel)`;
     }
     const below = this.get(x, y - 1, z);
-    if (y > 0) {
-      if (!below) return 'Needs a block underneath';
+    if (y > 0 && !below) {
+      if (!mod.bridge) return 'Needs a block underneath';
+      if (!this.bridgeHeld(x, y, z)) return 'A skybridge must reach out from a building beside it (or another skybridge)';
+    } else if (y > 0) {
       const bm = MODULES[below.m];
       if (bm.topper) return "Can't build on top of a roof or crown";
       if (bm.park) return "Can't build on top of a park";
@@ -224,6 +318,11 @@ export class City {
     const c = this.get(x, y, z);
     if (!c) return 'Nothing here';
     if (y >= 0 && this.get(x, y + 1, z)) return 'Remove the blocks above first';
+    const key = this.key(x, y, z);
+    for (const [dx, , dz] of N6.slice(0, 4)) {
+      const n = this.get(x + dx, y, z + dz);
+      if (n && MODULES[n.m].bridge && !this.bridgeHeld(n.x, n.y, n.z, key)) return 'A skybridge hangs from this block — remove the bridge first';
+    }
     if (c.m === 'foundation') {
       const B = this.buildings.get(c.b);
       if (B && B.stats) {
@@ -330,7 +429,7 @@ export class City {
   serialize() {
     const names = [];
     for (const B of this.buildings.values()) { const c = B.cells[0]; names.push([c.x, c.y, c.z, this.names.get(B.id)]); }
-    return { cells: [...this.cells.values()].map((c) => [c.x, c.y, c.z, c.m, c.s, c.v || 0]), names, terrain: [...this.terrain.values()].map((r) => [r.x, r.z, r.t, r.h]),
+    return { cells: [...this.cells.values()].map((c) => (c.o ? [c.x, c.y, c.z, c.m, c.s, c.v || 0, c.o] : [c.x, c.y, c.z, c.m, c.s, c.v || 0])), names, terrain: [...this.terrain.values()].map((r) => [r.x, r.z, r.t, r.h]),
       land: [...this.land.values()].map((r) => [r.x, r.z]), roads: [...this.roads.values()].map((r) => [r.x, r.z, r.t]) };
   }
 
@@ -338,7 +437,11 @@ export class City {
     this.clear();
     for (const [x, z] of data.land || []) if (!this.layout.inGrid(x, z)) this.setLand(x, z, true);
     for (const [x, z, t] of data.roads || []) if (TERRAIN[t]?.group === 'streets' && this.layout.inMap(x, z) && !this.layout.isGridStreet(x, z)) this.setRoad(x, z, t);
-    for (const [x, y, z, m, s, v] of data.cells) if (MODULES[m] && STYLES[s] && this.layout.buildable(x, z)) this.set(x, y, z, m, s, v || 0);
+    for (const [x, y, z, m, s, v, o] of data.cells) {
+      if (!MODULES[m] || !STYLES[s] || !this.layout.buildable(x, z)) continue;
+      const c = this.set(x, y, z, m, s, v || 0);
+      if (Array.isArray(o) && o.length === 4 && o.some((id) => DECOR[id])) c.o = o.map((id) => (DECOR[id] && !DECOR[id].remove ? id : null));
+    }
     for (const [x, z, t, h] of data.terrain || []) if (['cover', 'water'].includes(TERRAIN[t]?.group) && this.layout.buildable(x, z)) this.setTerrain(x, z, { t, h });
     this.recompute();
     this.applyNames(data.names || []);

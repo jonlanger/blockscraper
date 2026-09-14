@@ -133,6 +133,14 @@ const COVER = new Set(['mansard', 'hipped', 'gable', 'meadow', 'solar', 'roofgar
 const PARKS = ['lawnpark', 'formalgarden', 'plaza', 'playground', 'court', 'pond', 'communitygarden', 'dogpark', 'sculpturegarden', 'amphitheater', 'foodcourt', 'skatepark', 'zengarden',
   'bassin', 'parterre', 'chahar', 'wavepaving', 'starpiazza', 'jetgrid', 'bosque', 'cascade'];
 
+const ORNAMENTS = {
+  gothic: ['gargoyle', 'buttress'], beaux: ['cornice', 'balcony'], deco: ['frieze', 'neon'], nouveau: ['frieze', 'oriel'],
+  castiron: ['cornice', 'lanterns'], chicago: ['cornice', 'oriel'], brick: ['cornice', 'ivy'], mediterranean: ['overhang', 'balcony'],
+  moderne: ['neon', 'balcony'], midcentury: ['overhang', 'fins'], brutalist: ['overhang', 'fins'], glass: ['fins', null],
+  futurist: ['neon', 'fins'], solarpunk: ['overhang', 'ivy'],
+};
+const FULL_HEIGHT = new Set(['fins', 'buttress', 'oriel']);
+
 export function applyRandom(city, seed = Math.random()) {
   const L = city.layout, R = rng(seed + 0.123);
   const pick = (a) => a[Math.floor(R() * a.length)];
@@ -220,6 +228,14 @@ export function applyRandom(city, seed = Math.random()) {
       }
       for (let y = -basement + 1; y < 0; y++) if (!['station', 'railplatform'].includes(city.get(cx, y, cz)?.m)) S(cx, y, cz, 'core');
       if (!city.get(cx, 0, frontZ) || city.get(cx, 0, frontZ).m !== 'lobby') S(cx === x0 ? cx + 1 : cx - 1 >= x0 ? cx - 1 : cx, 0, frontZ, 'lobby');
+      // Style-typical ornaments: one crowning the top floor, one on the lower floors (or the full height).
+      const [topOrn, lowOrn] = ORNAMENTS[style];
+      const decorate = (x, y, z, id) => { const c = city.get(x, y, z); if (c && !MODULES[c.m].open && !MODULES[c.m].topper) c.o = [id, id, id, id]; };
+      if (R() < 0.6) for (let x = bx0; x <= bx1; x++) for (let z = bz0; z <= bz1; z++) decorate(x, floors - 1, z, topOrn);
+      if (lowOrn && R() < 0.45) {
+        const tall = FULL_HEIGHT.has(lowOrn), yTop = tall ? floors - 1 : Math.min(2, floors - 2);
+        for (let y = 1; y <= yTop; y++) for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) decorate(x, y, z, lowOrn);
+      }
       const crown = pick(CROWNS[style]);
       if (COVER.has(crown)) { for (let x = bx0; x <= bx1; x++) for (let z = bz0; z <= bz1; z++) S(x, floors, z, crown); }
       else { S(cx, floors, cz, crown); if (R() < 0.5 && bx1 > bx0) S(bx0, floors, bz0, pick(['watertower', 'solar', 'roofgarden', 'antenna'])); }

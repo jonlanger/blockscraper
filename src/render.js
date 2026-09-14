@@ -13,11 +13,12 @@ import { FACADES2 } from './facades2.js';
 import { facadeExtras, roofDetail, buildTopper, buildOpen, paletteColors } from './details.js';
 import { buildPark } from './parks.js';
 import { buildInterior } from './interiors.js';
+import { buildDecor } from './ornaments.js';
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const MAT_KEYS = ['m', 't', 'wl', 'wc', 'wd', 'l'];
 const ALL_FACADES = { ...FACADES, ...FACADES2 };
-const CAST = ['mold', 'balc', 'awn', 'canopy', 'col', 'pil', 'modil', 'balus', 'dent', 'top:', 'r:', 'tree', 'woodtank', 'hvac', 'bulkhead', 'fire', 'pk-', 'wp-', 'fr-'];
+const CAST = ['mold', 'balc', 'awn', 'canopy', 'col', 'pil', 'modil', 'balus', 'dent', 'top:', 'r:', 'tree', 'woodtank', 'hvac', 'bulkhead', 'fire', 'pk-', 'wp-', 'fr-', 'orn:', 'st:', 'win:'];
 
 function makeMats(clippingPlanes) {
   const glass = (emissive) => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.08, metalness: 0.6, emissive, emissiveIntensity: 0, clippingPlanes });
@@ -111,7 +112,7 @@ export class CityRenderer {
       return {
         g: G(bucket), S, colors,
         P: (p, x, y, z, ry = 0, glass = 'wd', s = 1, col) => place(p, mtx(x, y, z, 0, ry, 0, s, s, s), col ? { ...colors, ...col } : colors, glass),
-        PM: (p, m, col) => place(p, m, col ? { ...colors, ...col } : colors, 'wd'),
+        PM: (p, m, col, glass = 'wd') => place(p, m, col ? { ...colors, ...col } : colors, glass),
       };
     };
     const F = new Frame();
@@ -142,7 +143,7 @@ export class CityRenderer {
         const exposed = DIRS.map(([dx, dz]) => hollowAt(c.x + dx, c.y, c.z + dz));
         const T = local(pre + 'always', act, S);
         const sd = L.streetDir(c.x, c.z);
-        buildOpen(T, c.m, x0, y0, z0, S, exposed, seed, sd, DIRS.map(([dx, dz]) => city.get(c.x + dx, c.y, c.z + dz)?.m === c.m), c.s);
+        buildOpen(T, c.m, x0, y0, z0, S, exposed, seed, sd, DIRS.map(([dx, dz]) => city.get(c.x + dx, c.y, c.z + dz)?.m === c.m), c.s, { above: !!city.get(c.x, c.y + 1, c.z) });
         if (egg?.type === 'forest') {
           T.P(anyTreePart(seed, 1.25, 1), x0 + 3.0, y0 + 0.36, z0 + 1.0);
           T.P(anyTreePart(seed + 0.3, 1.1, 5), x0 + 1.0, y0 + 0.36, z0 + 3.0);
@@ -164,10 +165,17 @@ export class CityRenderer {
           isEntrance: c.y === 0 && street && !!mod.entrance,
           seed, col: hash(c.x * 3 + d, c.z * 7 + 1, 11),
           cornerL: hollowAt(c.x - rx, c.y, c.z - rz), cornerR: hollowAt(c.x + rx, c.y, c.z + rz),
+          decor: c.o?.[d] || null,
         };
         const X = facadeContext(F, S, c.s, ctx, G(pre + 'side' + d), placer(pre + 'side' + d, act));
         (ALL_FACADES[c.s] || FACADES.deco)(X);
         facadeExtras(X, c.m, c.s);
+        const orn = c.o?.[d];
+        if (orn) {
+          // Runs of the same ornament on the same face join up across neighboring blocks.
+          const joins = (x, y, z) => { const n = city.get(x, y, z); return !!n && n.o?.[d] === orn && !isHollow(n) && hollowAt(x + dx, y, z + dz); };
+          buildDecor(X, orn, { up: joins(c.x, c.y + 1, c.z), down: c.y > 0 && joins(c.x, c.y - 1, c.z), left: joins(c.x - rx, c.y, c.z - rz), right: joins(c.x + rx, c.y, c.z + rz) });
+        }
       }
       if (c.y >= 0 && topOpen) roofDetail(local(pre + 'always', act, S), x0, y0, z0, S, seed, !city.get(c.x, c.y + 1, c.z), c.s);
 

@@ -41,6 +41,7 @@ small { display: block; color: var(--muted); font-size: 11px; }
 .seg button { padding: 4px 6px; border-color: transparent; background: transparent; }
 .seg button.on { background: var(--on); border-color: var(--gold); }
 .seg .ic { width: 14px; height: 14px; }
+.seg button:disabled { opacity: .35; cursor: default; background: transparent; border-color: transparent; }
 .pill { font-size: 12px; white-space: nowrap; }
 .narrow-only, .narrow-info { display: none !important; }
 

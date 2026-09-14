@@ -1,6 +1,6 @@
 // DOM panels: brush, style + colorway accordions, block accordions, building info, view bar,
 // overflow menu, New City dialog, easter egg list, tooltip and toasts.
-import { MODULES, STYLES, STYLE_ORDER, CATEGORIES, TERRAIN, TERRAIN_GROUPS, levelName, rangeText } from './catalog.js';
+import { MODULES, STYLES, STYLE_ORDER, CATEGORIES, TERRAIN, TERRAIN_GROUPS, DECOR, DECOR_GROUPS, levelName, rangeText } from './catalog.js';
 import { MAP_SIZES, BLOCK_SIZES, PLOT_SIZES } from './layout.js';
 import { EGG_INFO } from './eggs.js';
 import { icon, hydrateIcons } from './icons.js';
@@ -13,7 +13,7 @@ const narrow = (px) => matchMedia(`(max-width: ${px}px)`).matches;
 
 export function initUI(game, A) {
   const $ = (id) => document.getElementById(id);
-  const open = { style: game.styleId, cats: new Set([MODULES[game.moduleId].cats[0]]), map: new Set(['cover']) };
+  const open = { style: game.styleId, cats: new Set([MODULES[game.moduleId].cats[0]]), map: new Set(['cover']), decor: new Set(['sculpture']) };
   hydrateIcons();
 
   // ---------- styles accordion ----------
@@ -113,7 +113,43 @@ export function initUI(game, A) {
     }
   }
 
+  // ---------- facade ornaments accordion ----------
+  const decorEl = $('decor');
+  function renderDecor() {
+    decorEl.innerHTML = '';
+    for (const grp of DECOR_GROUPS) {
+      const items = Object.values(DECOR).filter((t) => t.group === grp.id);
+      const isOpen = open.decor.has(grp.id), sel = game.brush === 'decor' && DECOR[game.decorId].group === grp.id;
+      const acc = document.createElement('div');
+      acc.className = 'acc' + (isOpen ? ' open' : '') + (sel ? ' sel' : '');
+      const head = document.createElement('button');
+      head.className = 'acc-head';
+      head.innerHTML = `<span class="cat-ic">${icon(grp.icon)}</span><span class="acc-title"><b>${grp.name}</b><small>${sel ? icon('check') + ' ' + DECOR[game.decorId].name : grp.blurb}</small></span>${CHEV}`;
+      head.onclick = () => { if (isOpen) open.decor.delete(grp.id); else open.decor.add(grp.id); renderDecor(); };
+      acc.append(head);
+      if (isOpen) {
+        const body = document.createElement('div');
+        body.className = 'acc-body modules';
+        for (const t of items) {
+          const b = document.createElement('button');
+          b.className = 'module' + (game.brush === 'decor' && game.decorId === t.id ? ' on' : '');
+          b.innerHTML = `<span class="mi">${icon(t.icon)}</span><span class="mt"><b>${t.name}</b><small>${t.desc}</small></span>
+            <span class="mc">${t.cost ? fmt(t.cost) : 'Free'}<small>${t.remove ? 'strip' : 'per wall'}${t.min ? ' · ' + levelName(t.min) + '+' : ''}</small></span>`;
+          b.onclick = () => { A.setDecor(t.id); if (narrow(900)) setDrawer(false); };
+          body.append(b);
+        }
+        acc.append(body);
+      }
+      decorEl.append(acc);
+    }
+  }
+
   function renderBrush() {
+    if (game.brush === 'decor') {
+      const t = DECOR[game.decorId];
+      $('brush').innerHTML = `<span class="cat-ic">${icon(t.icon)}</span><span class="acc-title"><b>${t.name}</b><small>Click a wall · Shift: floor · Ctrl/⌘+Shift: building</small></span>`;
+      return;
+    }
     if (game.brush === 'terrain') {
       const t = TERRAIN[game.terrainId];
       $('brush').innerHTML = `<span class="cat-ic">${icon(t.icon)}</span><span class="acc-title"><b>${t.name}</b><small>Map block · ${game.brushSize}×${game.brushSize} brush</small></span>`;
@@ -152,6 +188,8 @@ export function initUI(game, A) {
   $('wl-up').onclick = () => A.setWorkLevel(game.workLevel + 1);
   $('wl-down').onclick = () => A.setWorkLevel(game.workLevel - 1);
   $('cut').oninput = (e) => A.setCut(+e.target.value >= +e.target.max ? null : +e.target.value);
+  $('btn-undo').onclick = () => A.undo();
+  $('btn-redo').onclick = () => A.redo();
   $('btn-stack').onclick = () => A.stackFloor();
   $('btn-restyle').onclick = () => A.restyleAll();
   $('btn-prev').onclick = () => A.cycle(-1);
@@ -214,6 +252,7 @@ export function initUI(game, A) {
     renderBrush();
     renderStyles();
     renderBlocks();
+    renderDecor();
     renderMap();
     document.querySelectorAll('[data-brush]').forEach((b) => b.classList.toggle('on', +b.dataset.brush === game.brushSize));
     $('v-cut').classList.toggle('on', game.cutaway);
@@ -232,6 +271,7 @@ export function initUI(game, A) {
     document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', +b.dataset.speed === game.speed));
   }
   function expandFor(moduleId) { open.cats.add(MODULES[moduleId].cats[0]); }
+  function expandDecor(id) { open.decor.add(DECOR[id].group); }
 
   const STAR = icon('star', 'filled'), STAR_OFF = icon('star');
   function refresh() {
@@ -298,5 +338,5 @@ export function initUI(game, A) {
   const closeAll = () => { setMenu(false); for (const p of ['eggs', 'help']) $(p).classList.add('hidden'); $('info').classList.remove('open'); setDrawer(false); modal.classList.add('hidden'); };
 
   refreshPalette();
-  return { refresh, refreshPalette, toast, tooltip, inspect, expandFor, openStyle: (id) => { open.style = id; }, toggleHelp: () => popover('help'), closeAll };
+  return { refresh, refreshPalette, toast, tooltip, inspect, expandFor, expandDecor, openStyle: (id) => { open.style = id; }, toggleHelp: () => popover('help'), closeAll };
 }

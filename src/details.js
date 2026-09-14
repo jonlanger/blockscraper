@@ -15,6 +15,7 @@ import { bikeRackPart } from './props2.js';
 import { MODULES } from './catalog.js';
 import { ROOFS2 } from './roofs.js';
 import { fireEscapePart } from './kit.js';
+import { STRUCT_OPEN, STRUCT_TOPPERS } from './structures.js';
 
 const sconcePart = () => part('sconce', (L) => {
   L('t', 0x2b2b2b).bx(-0.06, -0.12, 0, 0.06, 0.12, 0.05);
@@ -82,7 +83,7 @@ export function facadeExtras(X, mid, styleId) {
   const r = (k) => hash((c.seed * 6151) | 0, c.level * 7 + k, 13);
   const colR = (k) => hash((c.col * 8191) | 0, k, 29);
   if (c.isGround && c.isEntrance && !NO_PIPE.has(styleId)) for (const s of [-1, 1]) X.P(sconcePart(), s * 1.5, 2.35, 0.1);
-  if (!c.isGround && !c.street && FIRE_STYLES.has(styleId) && colR(1) < 0.4 && !mod.open) X.P(fireEscapePart(2.8, c.level === 1), 0, 0.6, 0.02);
+  if (!c.isGround && !c.street && !c.decor && FIRE_STYLES.has(styleId) && colR(1) < 0.4 && !mod.open) X.P(fireEscapePart(2.8, c.level === 1), 0, 0.6, 0.02);
   if (c.cornerR && !NO_PIPE.has(styleId) && colR(2) < 0.5) {
     X.shape('t', SHAPES.cyl8, 1.88, 2, 0.16, 0.055, 4.02, 0.055, 0x4a4f55);
     X.box('t', 1.8, 1.96, 1.2, 1.26, 0.0, 0.2, 0x4a4f55);
@@ -102,7 +103,7 @@ export function facadeExtras(X, mid, styleId) {
     }
     if (mid === 'lobby') for (const s of [-1, 1]) X.P(pottedPlantPart(r(s + 3), 1.6), s * 1.55, 0, 0.55);
   }
-  if (!c.isGround && mod.residential && WIN[styleId]) {
+  if (!c.isGround && !c.decor && mod.residential && WIN[styleId]) {
     if (styleId === 'nouveau' && c.level % 2 === 1) return;
     if (styleId === 'chicago' && c.level % 3 === 1) return;
     for (const [u, v] of WIN[styleId]) {
@@ -325,7 +326,7 @@ const TOPPERS = {
 };
 
 export function buildTopper(T, id, x0, y0, z0, S, seed, nb = [false, false, false, false], egg = null) {
-  const p = TOPPERS[id] ? TOPPERS[id](seed) : ROOFS2[id] ? ROOFS2[id](seed, nb, egg) : null;
+  const p = TOPPERS[id] ? TOPPERS[id](seed) : ROOFS2[id] ? ROOFS2[id](seed, nb, egg) : STRUCT_TOPPERS[id] ? STRUCT_TOPPERS[id](seed, nb, egg) : null;
   if (p) T.P(p, x0 + 2, y0, z0 + 2, 0, 'wl');
 }
 
@@ -341,7 +342,9 @@ function edgeRails(T, x0, y0, z0, exposed) {
 }
 
 // sd: direction of the adjacent street (-1 if none); same: whether each neighbor is this block type.
-export function buildOpen(T, id, x0, y0, z0, S, exposed, seed, sd, same = [false, false, false, false], styleId = 'deco') {
+// env: { above } — whether a block sits on top.
+export function buildOpen(T, id, x0, y0, z0, S, exposed, seed, sd, same = [false, false, false, false], styleId = 'deco', env = {}) {
+  if (STRUCT_OPEN[id]) return STRUCT_OPEN[id](T, { x0, y0, z0, S, exposed, seed, sd, same, styleId, ...env });
   if (FRONTAGE.has(id)) return buildFrontage(T, id, x0, y0, z0, S, exposed, seed, sd, same, styleId);
   const front = sd < 0 ? 2 : sd;
   const cx = x0 + 2, cz = z0 + 2;

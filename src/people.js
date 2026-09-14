@@ -102,7 +102,7 @@ export class People {
       const n = Math.floor(base * occupancy(c.m, t) + Math.random());
       for (let i = 0; i < n && this.agents.length < this.crowd.max; i++) {
         this.agents.push({
-          ox: L.wx(c.x), oz: L.wz(c.z), y: c.y * CELL + (m.park ? 0.2 : m.open ? 0.36 : 0.25), lvl: c.y, park: !!m.park,
+          ox: L.wx(c.x), oz: L.wz(c.z), y: c.y * CELL + (m.park ? 0.2 : m.open ? m.deck ?? 0.36 : 0.25), lvl: c.y, park: !!m.park,
           x: 0.5 + Math.random() * 3, z: 0.5 + Math.random() * 3, tx: 0.5 + Math.random() * 3, tz: 0.5 + Math.random() * 3,
           sp: 0.5 + Math.random() * 0.6, pause: Math.random() * 2, rot: 0, ph: Math.random() * 6,
           look: [Math.floor(Math.random() * 12), Math.floor(Math.random() * 6), Math.floor(Math.random() * 6), Math.floor(Math.random() * 6)],

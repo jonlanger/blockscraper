@@ -30,6 +30,10 @@
       <div class="stat s-day" title="Time"><i data-icon="clock"></i><span id="s-day">Day 1</span></div>
     </div>
     <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Undo and redo">
+      <button id="btn-undo" title="Nothing to undo" aria-label="Undo" disabled><i data-icon="undo-2"></i></button>
+      <button id="btn-redo" title="Nothing to redo" aria-label="Redo" disabled><i data-icon="redo-2"></i></button>
+    </div>
     <div class="seg" role="group" aria-label="Game speed">
       <button data-speed="0" title="Pause (Space)" aria-label="Pause"><i data-icon="pause"></i></button>
       <button data-speed="1" title="Normal speed" aria-label="Normal speed"><i data-icon="play"></i></button>
@@ -62,7 +66,9 @@
     <div id="styles" class="accs"></div>
     <h3>2 · Building blocks</h3>
     <div id="blocks" class="accs"></div>
-    <h3>3 · Map blocks</h3>
+    <h3>3 · Facade ornaments</h3>
+    <div id="decor" class="accs"></div>
+    <h3>4 · Map blocks</h3>
     <div class="brush-size" role="group" aria-label="Map brush size">
       <span class="lbl">Brush</span>
       <button data-brush="1">1×1</button><button data-brush="3">3×3</button><button data-brush="5">5×5</button><button data-brush="7">7×7</button>
@@ -133,6 +139,7 @@
       <li>Buildings join automatically when blocks touch — build across plots, as wide and as deep as you like.</li>
       <li><b>Double-click</b> (or Select tool) chooses a building · <b>Tab</b> cycles · <b>Z</b> frames it · <b>O</b> focuses on it alone.</li>
       <li><b>Alt+click</b> copies a block's type and style · <b>R</b> stacks the top floor.</li>
+      <li><b>Ctrl/⌘+Z</b> undoes an edit · <b>Ctrl/⌘+Shift+Z</b> (or <b>Ctrl+Y</b>) redoes it.</li>
       <li><b>Q / E</b> build level (any depth) · <b>PgUp / PgDn</b> slice floors · <b>F</b> cutaway · <b>U</b> underground · <b>N</b> city view.</li>
     </ul>
     <h4>Rules</h4>
@@ -142,6 +149,8 @@
       <li>Subway platforms (B2) and bus bays touch an east–west street; rail platforms (B4) touch the red rail street.</li>
       <li><b>Map blocks</b> shape empty plots: paint land cover or water, and raise, lower or level the ground with the brush. Buildings need dry, level land.</li>
       <li><b>Land</b> map blocks grow the ground out past the map edge; <b>Streets &amp; paths</b> add roads, bike paths, boulevards and parking — buildings open onto them.</li>
+      <li><b>Facade ornaments</b> go on a wall: click a face for one wall, the roof of a block for all its walls, <b>Shift+click</b> for the whole floor, <b>Ctrl/⌘+Shift+click</b> for the whole building. Stacked columns, buttresses and oriels join into one. <b>Alt+click</b> picks up an ornament.</li>
+      <li><b>Skybridges</b> hang from a building beside them — no block needed below. <b>Structures &amp; Sculpture</b> also has loggias, statues and monuments.</li>
       <li><b>Entries &amp; Terraces</b> dress a street frontage: café terraces, stoops, grand stairs, porticos and arcades take the chosen style.</li>
       <li>Parks and scenic terrain give nearby buildings +10% income. Fill a whole plot with one park type to get its full layout — basins, parterres and piazzas grow with the space.</li>
       <li>Some block combinations hide <b>easter eggs</b> <i data-icon="egg"></i>.</li>

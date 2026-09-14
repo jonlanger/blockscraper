@@ -5,7 +5,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { CELL, MAX_LEVEL, DAY_SECONDS, MODULES, STYLES, TERRAIN, levelName } from './catalog.js';
+import { CELL, MAX_LEVEL, DAY_SECONDS, MODULES, STYLES, TERRAIN, DECOR, levelName, isHollow } from './catalog.js';
 import { TerrainRenderer, planTerrain, GROUND_Y, tk } from './terrain.js';
 import { Layout, DEFAULT_LAYOUT } from './layout.js';
 import { City } from './city.js';
@@ -74,11 +74,52 @@ let city = null, cityR = null, terrainR = null;
 const SAVE_KEY = 'blockscraper-save-v1';
 const game = {
   money: 2_000_000, sandbox: false, time: 0.32, day: 1, speed: 1,
-  tool: 'build', moduleId: 'lobby', styleId: 'deco', variant: 0, brush: 'module', terrainId: 'grass', brushSize: 3,
+  tool: 'build', moduleId: 'lobby', styleId: 'deco', variant: 0, brush: 'module', terrainId: 'grass', decorId: 'gargoyle', brushSize: 3,
   cutaway: false, underground: false, isolate: false, cutLevel: null, workLevel: 0, activeId: 0, hood: false,
   eggsFound: new Set(), layoutCfg: { ...DEFAULT_LAYOUT }, city: null,
 };
 const activeB = () => city.buildings.get(game.activeId);
+
+// ---------- undo / redo ----------
+// Each edit stores only the blocks and map cells it changed (see City.beginEdit), plus what it cost.
+const HISTORY_MAX = 100;
+const history = { undo: [], redo: [] };
+
+function record(label, fn) {
+  city.beginEdit();
+  const money = game.money;
+  try { fn(); } finally {
+    const edit = city.endEdit();
+    if (edit) {
+      Object.assign(edit, { label, money: game.money - money });
+      history.undo.push(edit);
+      if (history.undo.length > HISTORY_MAX) history.undo.shift();
+      history.redo.length = 0;
+      refreshHistory();
+    }
+  }
+}
+
+function stepHistory(from, to, side, verb) {
+  const edit = from.pop();
+  if (!edit) return;
+  city.applyEdit(edit, side);
+  game.money += side ? edit.money : -edit.money;
+  to.push(edit);
+  afterEdit();
+  refreshHistory();
+  ui.toast(`${verb} ${edit.label}`, '', side ? 'redo-2' : 'undo-2');
+}
+const undo = () => stepHistory(history.undo, history.redo, 0, 'Undid');
+const redo = () => stepHistory(history.redo, history.undo, 1, 'Redid');
+
+function refreshHistory() {
+  const u = history.undo.at(-1), r = history.redo.at(-1), bu = document.getElementById('btn-undo'), br = document.getElementById('btn-redo');
+  bu.disabled = !u;
+  br.disabled = !r;
+  bu.title = u ? `Undo ${u.label} (Ctrl/⌘+Z)` : 'Nothing to undo';
+  br.title = r ? `Redo ${r.label} (Ctrl/⌘+Shift+Z)` : 'Nothing to redo';
+}
 const tallest = () => [...city.buildings.values()].filter((B) => !B.park).sort((a, b) => b.bbox.y1 - a.bbox.y1 || b.cells.length - a.cells.length)[0];
 
 function initCity(cfg) {
@@ -86,6 +127,8 @@ function initCity(cfg) {
   const layout = new Layout(game.layoutCfg);
   city = new City(layout);
   game.city = city;
+  history.undo.length = history.redo.length = 0;
+  refreshHistory();
   if (!cityR) cityR = new CityRenderer(scene, city);
   else cityR.setCity(city);
   world.setLayout(layout);
@@ -284,6 +327,12 @@ function stackFloor() {
     if (e) { err = e; continue; }
     if (!game.sandbox && game.money < MODULES[mid].cost) { err = 'Not enough funds'; break; }
     city.set(c.x, y, c.z, mid, c.s, c.v);
+    if (c.o && !MODULES[mid].open) {
+      // Ornaments carry up; crowning ones (gargoyles, cornices) move to the new top floor.
+      const o = c.o;
+      o.forEach((id, d) => { if (id) city.setDecor(c.x, y, c.z, d, id); });
+      o.forEach((id, d) => { if (CROWN_DECOR.has(id)) city.setDecor(c.x, c.y, c.z, d, null); });
+    }
     if (!game.sandbox) game.money -= MODULES[mid].cost;
     cost += MODULES[mid].cost;
     placed++;
@@ -294,6 +343,57 @@ function stackFloor() {
     ui.toast(`Stacked ${levelName(y)} · ${placed} blocks${game.sandbox ? '' : ' · ' + fmt(cost)}`);
     if (game.workLevel === top) setWorkLevel(y);
   } else ui.toast(err || 'Nothing to stack', 'bad');
+}
+
+// ---------- facade ornaments ----------
+const DIR4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const CROWN_DECOR = new Set(['gargoyle', 'cornice']);
+
+// Why side d of block c can't take the ornament (null if it can).
+function decorBlocked(c, d, def) {
+  const m = MODULES[c.m];
+  if (m.open || m.topper || m.park) return 'Ornaments attach to solid building walls';
+  if (c.y < 0) return 'Ornaments only go on above-ground walls';
+  if (c.y < def.min) return `${def.name} start on ${levelName(def.min)}`;
+  const n = city.get(c.x + DIR4[d][0], c.y, c.z + DIR4[d][1]);
+  if (n && !isHollow(n)) return 'That wall is hidden by its neighbor';
+  const cur = c.o?.[d] || null;
+  if (def.remove) return cur ? null : 'No ornament on that wall';
+  return cur === def.id ? `Already has ${def.name}` : null;
+}
+
+// One wall (side click), every wall of a block (roof click), a whole floor (Shift) or building (Ctrl/⌘+Shift).
+function decorHover(hit) {
+  if (!hit || hit.kind !== 'cell') return null;
+  const cell = city.get(hit.ix, hit.iy, hit.iz), def = DECOR[game.decorId], B = city.buildings.get(cell.b);
+  const d = hit.n[0] > 0 ? 0 : hit.n[0] < 0 ? 1 : hit.n[2] > 0 ? 2 : hit.n[2] < 0 ? 3 : -1;
+  const cells = !B ? [cell] : modeHeld === 'block' ? B.cells : modeHeld ? B.cells.filter((c) => c.y === cell.y) : [cell];
+  const dirs = !modeHeld && d >= 0 ? [d] : [0, 1, 2, 3];
+  const faces = [];
+  let err = null;
+  for (const c of cells) for (const dd of dirs) { const e = decorBlocked(c, dd, def); if (e) err = err || e; else faces.push([c, dd]); }
+  // With nothing to do, explain the wall under the pointer first.
+  const why = faces.length ? null : (d >= 0 && decorBlocked(cell, d, def)) || err || 'Nothing to decorate here';
+  return { decor: true, t: [hit.ix, hit.iy, hit.iz], cell, d, faces, err: why };
+}
+
+function applyDecor(h) {
+  if (h.err) return ui.toast(h.err, 'bad');
+  const def = DECOR[game.decorId], n = h.faces.length, cost = def.cost * n;
+  if (!game.sandbox && game.money < cost) return ui.toast(`Not enough funds — that costs ${fmt(cost)}`, 'bad');
+  for (const [c, d] of h.faces) city.setDecor(c.x, c.y, c.z, d, def.remove ? null : def.id);
+  if (!game.sandbox) game.money -= cost;
+  if (h.cell.b !== game.activeId) setActive(h.cell.b); else ui.refresh();
+  if (n > 1) ui.toast(`${def.remove ? 'Stripped' : def.name + ' on'} ${n} walls${game.sandbox || !cost ? '' : ' · ' + fmt(cost)}`);
+}
+
+function pickDecor(h) {
+  const ids = (h.d >= 0 ? [h.cell.o?.[h.d]] : h.cell.o || []).filter(Boolean);
+  if (!ids.length) return ui.toast('No ornament on that wall', 'bad');
+  A.setDecor(ids[0]);
+  ui.expandDecor(ids[0]);
+  ui.refreshPalette();
+  ui.toast(`Picked ${DECOR[ids[0]].name}`);
 }
 
 // Map blocks: apply a planned terrain edit (see planTerrain).
@@ -398,6 +498,7 @@ const A = {
   pickColorway: (s, v) => { game.styleId = s; game.variant = v; ui.refreshPalette(); },
   setModule: (m) => { game.moduleId = m; game.brush = 'module'; game.tool = 'build'; ui.refreshPalette(); },
   setTerrain: (t) => { game.terrainId = t; game.brush = 'terrain'; game.tool = 'build'; ui.refreshPalette(); },
+  setDecor: (id) => { game.decorId = id; game.brush = 'decor'; game.tool = 'build'; ui.refreshPalette(); },
   setBrushSize: (n) => { game.brushSize = n; if (game.brush !== 'terrain') game.brush = 'terrain'; game.tool = 'build'; ui.refreshPalette(); },
   setSpeed: (s) => { game.speed = s; ui.refreshPalette(); },
   toggleCutaway: () => { game.cutaway = !game.cutaway; people.populate(city, activeB(), game.time); ui.refreshPalette(); },
@@ -408,7 +509,9 @@ const A = {
   toggleSandbox: () => { game.sandbox = !game.sandbox; ui.toast(game.sandbox ? 'Sandbox on — unlimited funds' : 'Sandbox off', '', 'infinity'); ui.refreshPalette(); ui.refresh(); },
   toggleQuality: () => { quality.high = !quality.high; quality.autoChecked = true; applyQuality(); },
   rename: (n) => { if (activeB()) city.names.set(game.activeId, n); },
-  frame, neighborhood, cycle, setWorkLevel, setCut, stackFloor, restyleAll, newCity,
+  stackFloor: () => record('Stack floor', stackFloor),
+  restyleAll: () => record('Restyle all', restyleAll),
+  frame, neighborhood, cycle, setWorkLevel, setCut, newCity, undo, redo,
 };
 const ui = initUI(game, A);
 
@@ -453,6 +556,7 @@ function computeHover() {
   });
   if (!hit) return;
   const cell = hit.kind === 'cell' ? city.get(hit.ix, hit.iy, hit.iz) : null;
+  if (game.tool === 'build' && game.brush === 'decor') { hover = decorHover(hit); return; }
   if (game.tool === 'build') {
     if (hit.kind === 'cell' && !hit.n.some((v) => v)) return;
     const t = [hit.ix + hit.n[0], hit.iy + hit.n[1], hit.iz + hit.n[2]];
@@ -502,6 +606,27 @@ function updateOverlays(mode) {
     ghost.scale.set((x1 - x0 + 1) * CELL + 0.1, 0.6, (z1 - z0 + 1) * CELL + 0.1);
     const price = game.sandbox ? 'Free in sandbox' : hover.plan.cost ? fmt(hover.plan.cost) : 'Free';
     ui.tooltip(pointer.x, pointer.y, `<b>${icon(def.icon)} ${def.name}</b> · ${n} block${n === 1 ? '' : 's'}<small>${hover.err ? icon('ban') + ' ' + hover.err : price}</small>`);
+    return;
+  }
+  if (hover.decor) {
+    const def = DECOR[game.decorId], n = hover.faces.length, color = hover.err ? 0xff4d4d : TOOL_COLORS.build;
+    ghost.visible = true;
+    ghost.material.color.setHex(color);
+    ghostEdges.material.color.setHex(color);
+    const one = n === 1 ? hover.faces[0] : !n && hover.d >= 0 && !modeHeld ? [hover.cell, hover.d] : null;
+    if (one) {
+      const [c, d] = one, [dx, dz] = DIR4[d];
+      ghost.position.set(L.wx(c.x) + 2 + dx * 2.1, c.y * CELL + 2, L.wz(c.z) + 2 + dz * 2.1);
+      ghost.scale.set(dx ? 0.35 : 4.2, 4.1, dz ? 0.35 : 4.2);
+    } else {
+      const list = n ? hover.faces.map(([c]) => c) : [hover.cell];
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (const c of list) { x0 = Math.min(x0, c.x); x1 = Math.max(x1, c.x); y0 = Math.min(y0, c.y); y1 = Math.max(y1, c.y); z0 = Math.min(z0, c.z); z1 = Math.max(z1, c.z); }
+      ghost.position.set(L.wx((x0 + x1 + 1) / 2), ((y0 + y1 + 1) / 2) * CELL, L.wz((z0 + z1 + 1) / 2));
+      ghost.scale.set((x1 - x0 + 1) * CELL + 0.5, (y1 - y0 + 1) * CELL + 0.1, (z1 - z0 + 1) * CELL + 0.5);
+    }
+    const price = def.remove ? 'Click to strip' : game.sandbox ? 'Free in sandbox' : fmt(def.cost * n);
+    ui.tooltip(pointer.x, pointer.y, `<b>${icon(def.icon)} ${def.name}</b>${n > 1 ? ` · ${n} walls` : ''}<small>${hover.err ? icon('ban') + ' ' + hover.err : price}</small>`);
     return;
   }
   const [x, y, z] = hover.t;
@@ -555,16 +680,17 @@ canvas.addEventListener('pointerup', (e) => {
   modeHeld = modeOf(e);
   computeHover();
   if (!hover) return;
-  if (hover.terrain) return applyTerrain(hover);
+  if (hover.terrain) return record(TERRAIN[game.terrainId].name, () => applyTerrain(hover));
+  if (hover.decor) return e.altKey ? pickDecor(hover) : record(DECOR[game.decorId].name, () => applyDecor(hover));
   const [x, y, z] = hover.t, mode = modeOf(e);
   if (e.altKey && hover.cell) {
     game.moduleId = hover.cell.m; game.styleId = hover.cell.s; game.variant = hover.cell.v || 0; game.tool = 'build'; game.brush = 'module';
     ui.expandFor(hover.cell.m); ui.openStyle(hover.cell.s); ui.refreshPalette();
     return ui.toast(`Picked ${MODULES[hover.cell.m].name} · ${STYLES[hover.cell.s].name}`);
   }
-  if (game.tool === 'build') placeAt(x, y, z, mode);
-  else if (game.tool === 'erase') eraseAt(x, y, z, mode);
-  else if (game.tool === 'paint') paintAt(x, y, z, mode);
+  if (game.tool === 'build') record(MODULES[game.moduleId].name, () => placeAt(x, y, z, mode));
+  else if (game.tool === 'erase') record('Erase', () => eraseAt(x, y, z, mode));
+  else if (game.tool === 'paint') record('Paint', () => paintAt(x, y, z, mode));
   else { setActive(hover.cell.b); ui.inspect(hover.cell); }
 });
 canvas.addEventListener('dblclick', () => {
@@ -578,7 +704,13 @@ canvas.addEventListener('dblclick', () => {
 addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   modeHeld = modeOf(e);
-  switch (e.key.toLowerCase()) {
+  const key = e.key.toLowerCase();
+  if ((e.metaKey || e.ctrlKey) && (key === 'z' || key === 'y')) {
+    e.preventDefault();
+    if (key === 'y' || e.shiftKey) redo(); else undo();
+    return;
+  }
+  switch (key) {
     case 'v': A.pickColorway(game.styleId, (game.variant + 1) % STYLES[game.styleId].variants.length); break;
     case 'b': A.setTool('build'); break;
     case 'x': A.setTool('erase'); break;
@@ -589,7 +721,7 @@ addEventListener('keydown', (e) => {
     case 'o': A.toggleIsolate(); break;
     case 'z': frame(); break;
     case 'n': neighborhood(); break;
-    case 'r': stackFloor(); break;
+    case 'r': A.stackFloor(); break;
     case 'q': case '[': setWorkLevel(game.workLevel - 1); break;
     case 'e': case ']': setWorkLevel(game.workLevel + 1); break;
     case 'pageup': { e.preventDefault(); const top = activeB()?.bbox.y1 ?? 0; setCut(game.cutLevel === null ? top : game.cutLevel + 1 > top ? null : game.cutLevel + 1); break; }
