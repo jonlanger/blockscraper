@@ -116,7 +116,10 @@ export class World {
     this.terrainCity = undefined;
     this.setDepth(0);
     this.buildGround();
-    this.buildProps();
+    this.streetGroup = null;
+    this.buildStreets();
+    this.streetLayout = layout;
+    this.streetVersion = 0;
     for (const band of layout.hStreets) {
       this.buildTunnel(band.zc, 0, 0x2f6fd0);
       if (band.j === layout.railBand) this.buildTunnel(band.zc, -8, 0xc0392b);
@@ -125,7 +128,6 @@ export class World {
     for (const band of layout.hStreets) this.subways.push(...this.makeTrains(-5.8, 12, 4, 0xc9ced3, 0x2f6fd0, [[band.zc + 1.7, 1, -40 + band.j * 20], [band.zc - 1.7, -1, 30 - band.j * 15]], band.j));
     const rb = layout.hStreets[layout.railBand];
     this.rails = rb ? this.makeTrains(-13.8, 16, 5, 0xe3e6ea, 0xc0392b, [[rb.zc + 1.7, -1, 60], [rb.zc - 1.7, 1, -20]], rb.j) : [];
-    this.buildTraffic();
     this.buildBuses();
     this.setUnderground(this.underground);
   }
@@ -206,6 +208,7 @@ export class World {
 
   // Rebuild the plot slab and topsoil with openings under map-block terrain (so lakes can sink).
   setTerrain(city) {
+    this.syncStreets(city);
     if (this.terrainCity === city && this.terrainVersion === city?.terrainVersion) return;
     this.terrainCity = city;
     this.terrainVersion = city?.terrainVersion;
@@ -262,9 +265,47 @@ export class World {
     this.sun.shadow.camera.updateProjectionMatrix();
   }
 
-  buildProps() {
+  // Is the street at this world point closed by a building?
+  shutAt(x, z) {
+    const L = this.layout;
+    return !!L.closed?.size && L.closed.has(tk(L.gx(x), L.gz(z)));
+  }
+
+  syncStreets(city) {
+    const v = city?.streetVersion ?? 0;
+    if (this.streetLayout === this.layout && this.streetVersion === v) return;
+    this.streetLayout = this.layout;
+    this.streetVersion = v;
+    this.buildStreets();
+  }
+
+  // What changes when buildings close streets: paving over the closed street blocks, the street
+  // furniture, and traffic and pedestrians, which turn back where a street is closed.
+  buildStreets() {
+    if (this.streetGroup) {
+      this.streetGroup.traverse((o) => { if (o.isBatchedMesh) o.dispose(); else if (o.geometry) o.geometry.dispose(); });
+      this.group.remove(this.streetGroup);
+    }
+    const L = this.layout;
+    this.streetGroup = new THREE.Group();
+    this.group.add(this.streetGroup);
+    if (L.closed?.size) {
+      // Sits just above the road, sidewalks and curbs (top 0.02) so they vanish under it.
+      const g = new GeoBuilder();
+      for (const { x, z } of L.closed.values()) if (L.isGridStreet(x, z)) g.box(L.wx(x) + 2, -0.1375, L.wz(z) + 2, CELL, 0.325, CELL, [0x8d8779, PAT.CONCRETE]);
+      if (!g.empty) {
+        const m = new THREE.Mesh(g.build(), this.groundMat);
+        m.receiveShadow = true;
+        this.streetGroup.add(m);
+      }
+    }
+    this.buildProps(this.streetGroup);
+    this.buildTraffic();
+  }
+
+  buildProps(target) {
     const L = this.layout, b = new PartBatcher();
-    const P = (p, x, z, ry = 0, s = 1) => b.place(p, mtx(x, 0, z, 0, ry, 0, s, s, s), {}, 'always', 'wd', true);
+    const P = (p, x, z, ry = 0, s = 1) => { if (!this.shutAt(x, z)) b.place(p, mtx(x, 0, z, 0, ry, 0, s, s, s), {}, 'always', 'wd', true); };
     const xs = L.vStreets.map((s) => s.xc), zs = L.hStreets.map((s) => s.zc);
     const nearX = (x) => xs.some((c) => Math.abs(x - c) < 13);
     const nearZ = (z) => zs.some((c) => Math.abs(z - c) < 13);
@@ -298,7 +339,7 @@ export class World {
         P(bollardPart(), xc + sx * 7.3, zc + sz * 10.2);
       }
     }
-    b.build(this.group, this.mats);
+    b.build(target, this.mats);
   }
 
   buildTunnel(zc, yo, stripe) {
@@ -339,10 +380,27 @@ export class World {
   }
 
   buildTraffic() {
-    const L = this.layout;
+    const L = this.layout, closed = L.closed?.size ? L.closed : null;
+    // Cut a lane or sidewalk run (a strip hw either side of its center line) wherever a building closes
+    // the street under it; each open stretch becomes its own run.
+    const split = (run, hw) => {
+      if (!closed) return [run];
+      const alongX = run.axis === 'x';
+      const cell = alongX ? (v) => L.gx(v) : (v) => L.gz(v), edge = alongX ? (i) => L.wx(i) : (i) => L.wz(i);
+      const across = [...new Set([run.c - hw, run.c + hw].map(alongX ? (v) => L.gz(v) : (v) => L.gx(v)))];
+      const out = [];
+      let s = run.lo;
+      for (let i = cell(run.lo + 1e-3); i <= cell(run.hi - 1e-3); i++) {
+        if (!across.some((k) => closed.has(alongX ? tk(i, k) : tk(k, i)))) continue;
+        if (edge(i) - s > 10) out.push({ ...run, lo: s, hi: edge(i) });
+        s = edge(i + 1);
+      }
+      if (run.hi - s > 10) out.push({ ...run, lo: s });
+      return out;
+    };
     const lanes = [];
-    for (const s of L.hStreets) for (const [off, dir] of [[-1.9, 1], [1.9, -1]]) lanes.push({ axis: 'x', c: s.zc + off, dir, lo: L.ox, hi: L.ox + L.width });
-    for (const s of L.vStreets) for (const [off, dir] of [[1.9, 1], [-1.9, -1]]) lanes.push({ axis: 'z', c: s.xc + off, dir, lo: L.oz, hi: L.oz + L.depth });
+    for (const s of L.hStreets) for (const [off, dir] of [[-1.9, 1], [1.9, -1]]) lanes.push(...split({ axis: 'x', c: s.zc + off, dir, lo: L.ox, hi: L.ox + L.width }, 1.1));
+    for (const s of L.vStreets) for (const [off, dir] of [[1.9, 1], [-1.9, -1]]) lanes.push(...split({ axis: 'z', c: s.xc + off, dir, lo: L.oz, hi: L.oz + L.depth }, 1.1));
     const types = [carParts(), carParts(), vanParts(), truckParts(), carParts()];
     const palette = [0xc0392b, 0x2c3e50, 0xecf0f1, 0x27ae60, 0xf1c40f, 0x7f8c8d, 0x2980b9, 0x111111, 0xe67e22, 0xf2c14e];
     this.vehicles = [];
@@ -367,18 +425,18 @@ export class World {
           im.castShadow = mat !== 'l';
           im.frustumCulled = false;
           list.forEach((v, i) => im.setColorAt(i, new THREE.Color(colored ? v.color : 0xffffff)));
-          this.group.add(im);
+          this.streetGroup.add(im);
           meshes.push(im);
         }
       }
       return { list, meshes };
     });
 
-    this.peds = new Crowd(this.group, 400, this.mats.m);
+    this.peds = new Crowd(this.streetGroup, 400, this.mats.m);
     this.pedList = [];
     const walks = [];
-    for (const s of L.hStreets) for (const o of [-8.9, 8.9]) if (s.zc + o > L.oz && s.zc + o < L.oz + L.depth) walks.push({ axis: 'x', c: s.zc + o, lo: L.ox, hi: L.ox + L.width });
-    for (const s of L.vStreets) for (const o of [-8.9, 8.9]) if (s.xc + o > L.ox && s.xc + o < L.ox + L.width) walks.push({ axis: 'z', c: s.xc + o, lo: L.oz, hi: L.oz + L.depth });
+    for (const s of L.hStreets) for (const o of [-8.9, 8.9]) if (s.zc + o > L.oz && s.zc + o < L.oz + L.depth) walks.push(...split({ axis: 'x', c: s.zc + o, lo: L.ox, hi: L.ox + L.width }, 0.9));
+    for (const s of L.vStreets) for (const o of [-8.9, 8.9]) if (s.xc + o > L.ox && s.xc + o < L.ox + L.width) walks.push(...split({ axis: 'z', c: s.xc + o, lo: L.oz, hi: L.oz + L.depth }, 0.9));
     for (const w of walks) {
       const n = Math.min(40, Math.round((w.hi - w.lo) / 9));
       for (let i = 0; i < n && this.pedList.length < 400; i++) {
@@ -469,7 +527,7 @@ export class World {
       for (const o of this.buses) { if (o === bus || o.key !== bus.key) continue; const g = (o.pos - bus.pos) * bus.dir; if (g > 0 && g < gap) gap = g; }
       advance(bus, this.stops.bus.get(bus.key) || [], simDt, 10, 3, lim + 8, 4, gap);
       bus.mesh.position.x = bus.pos;
-      bus.mesh.visible = Math.abs(bus.pos) < lim - 5.5;
+      bus.mesh.visible = Math.abs(bus.pos) < lim - 5.5 && ![-5, 0, 5].some((o) => this.shutAt(bus.pos + o, bus.mesh.position.z));
     }
   }
 

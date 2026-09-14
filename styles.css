@@ -43,7 +43,8 @@ small { display: block; color: var(--muted); font-size: 11px; }
 .seg .ic { width: 14px; height: 14px; }
 .seg button:disabled { opacity: .35; cursor: default; background: transparent; border-color: transparent; }
 .pill { font-size: 12px; white-space: nowrap; }
-.narrow-only, .narrow-info { display: none !important; }
+.narrow-only, .narrow-info, .narrow-new { display: none !important; }
+button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
 .menu-wrap { position: relative; }
 .menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 240px; padding: 5px; display: flex; flex-direction: column; gap: 2px; z-index: 8; }
@@ -202,10 +203,21 @@ button.primary:hover { background: #ffd36b; }
   .stat { padding: 4px 6px; }
   .s-income { display: none; }
   .seg button { padding: 4px 5px; }
-  #viewbar { left: var(--gap); right: var(--gap); transform: none; justify-content: flex-start; }
+  /* Top bar: keep money, undo/redo and speed on one row; New city moves into the menu. */
+  #topbar { gap: 4px; }
+  .stats { flex-shrink: 0; }
+  #btn-new, [data-speed="4"] { display: none; }
+  .narrow-new { display: inline-flex !important; }
+  /* View bar wraps onto two rows instead of hiding controls off-screen. */
+  #viewbar { left: var(--gap); right: var(--gap); transform: none; justify-content: center; flex-wrap: wrap; row-gap: 2px; overflow-x: visible; }
+  #palette { bottom: calc(var(--gap) + 94px); }
   #cut { width: 64px; }
   #viewbar .ctl b { min-width: 42px; }
   #tooltip { display: none; }
+}
+@media (max-width: 380px) {
+  .brand { display: none; }
+  .stat .ic { display: none; }
 }
 @media (hover: none) {
   #tooltip { display: none; }

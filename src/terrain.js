@@ -356,7 +356,7 @@ export class TerrainRenderer {
   // kind and the city streets, with curbs, sidewalks or bollards where they meet anything else.
   buildRoad(rd, x, z, x0, z0, g, bat) {
     const city = this.city, L = city.layout, R = rng(hash(x, z, 57) + 0.02), Y = GROUND_Y;
-    const nb = N4.map(([dx, dz]) => city.roads.get(tk(x + dx, z + dz))?.t || (L.isGridStreet(x + dx, z + dz) ? 'street' : null));
+    const nb = N4.map(([dx, dz]) => city.roads.get(tk(x + dx, z + dz))?.t || (L.isOpenGridStreet(x + dx, z + dz) ? 'street' : null));
     const wheels = (k) => !!k && k !== 'boulevard';
     const alongX = !!(nb[0] || nb[1]), alongZ = !!(nb[2] || nb[3]);
     const ax = alongZ && !alongX ? 'z' : 'x', straight = alongX !== alongZ;

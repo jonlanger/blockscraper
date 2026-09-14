@@ -7,7 +7,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CELL, MAX_LEVEL, DAY_SECONDS, MODULES, STYLES, TERRAIN, DECOR, levelName, isHollow } from './catalog.js';
 import { TerrainRenderer, planTerrain, GROUND_Y, tk } from './terrain.js';
-import { Layout, DEFAULT_LAYOUT } from './layout.js';
+import { Layout, DEFAULT_LAYOUT, STREET } from './layout.js';
 import { City } from './city.js';
 import { CityRenderer } from './render.js';
 import { World } from './world.js';
@@ -74,6 +74,7 @@ let city = null, cityR = null, terrainR = null;
 const SAVE_KEY = 'blockscraper-save-v1';
 const game = {
   money: 2_000_000, sandbox: false, time: 0.32, day: 1, speed: 1,
+  fill: null, // 'plot' | 'block': the Shift / Ctrl+Shift fills, for touch screens
   tool: 'build', moduleId: 'lobby', styleId: 'deco', variant: 0, brush: 'module', terrainId: 'grass', decorId: 'gargoyle', brushSize: 3,
   cutaway: false, underground: false, isolate: false, cutLevel: null, workLevel: 0, activeId: 0, hood: false,
   eggsFound: new Set(), layoutCfg: { ...DEFAULT_LAYOUT }, city: null,
@@ -250,6 +251,15 @@ function setActive(id, fly = false) {
 function fillArea(x, z, mode) {
   const L = city.layout;
   if (!mode || !L.inGrid(x, z)) return [[x, z]];
+  if (L.isGridStreet(x, z)) {
+    // On a street: Plot fills across the street here, Block the whole stretch between intersections.
+    const inX = L.isStreetX(x), inZ = L.isStreetZ(z), sx = Math.floor(x / L.P) * L.P, sz = Math.floor(z / L.Q) * L.Q;
+    const xs = inX ? [sx, sx + STREET - 1] : mode === 'block' ? [sx + STREET, sx + L.P - 1] : [x, x];
+    const zs = inZ ? [sz, sz + STREET - 1] : mode === 'block' ? [sz + STREET, sz + L.Q - 1] : [z, z];
+    const out = [];
+    for (let gx = xs[0]; gx <= xs[1]; gx++) for (let gz = zs[0]; gz <= zs[1]; gz++) if (L.inGrid(gx, gz)) out.push([gx, gz]);
+    return out;
+  }
   if (mode === 'block') {
     const b = L.blockBounds(x, z), out = [];
     for (let gx = b.x0; gx <= b.x1; gx++) for (let gz = b.z0; gz <= b.z1; gz++) out.push([gx, gz]);
@@ -271,6 +281,7 @@ function placeAt(x, y, z, mode) {
     if (!game.sandbox && game.money < mod.cost) { err = `Not enough funds — ${mod.name} costs ${fmt(mod.cost)}`; break; }
     city.set(tx, y, tz, game.moduleId, game.styleId, game.variant);
     if (city.terrain.has(tk(tx, tz))) city.setTerrain(tx, tz, null); // level land cover makes way
+    if (y <= 0 && city.roads.has(tk(tx, tz))) city.setRoad(tx, tz, null); // so do map roads built over
     if (!game.sandbox) game.money -= mod.cost;
     placed++;
     last = [tx, y, tz];
@@ -499,6 +510,7 @@ const A = {
   setModule: (m) => { game.moduleId = m; game.brush = 'module'; game.tool = 'build'; ui.refreshPalette(); },
   setTerrain: (t) => { game.terrainId = t; game.brush = 'terrain'; game.tool = 'build'; ui.refreshPalette(); },
   setDecor: (id) => { game.decorId = id; game.brush = 'decor'; game.tool = 'build'; ui.refreshPalette(); },
+  setFill: (f) => { game.fill = f || null; modeHeld = game.fill; ui.refreshPalette(); },
   setBrushSize: (n) => { game.brushSize = n; if (game.brush !== 'terrain') game.brush = 'terrain'; game.tool = 'build'; ui.refreshPalette(); },
   setSpeed: (s) => { game.speed = s; ui.refreshPalette(); },
   toggleCutaway: () => { game.cutaway = !game.cutaway; people.populate(city, activeB(), game.time); ui.refreshPalette(); },
@@ -666,16 +678,22 @@ function updateOverlays(mode) {
 }
 
 let down = null, modeHeld = null;
-const modeOf = (e) => (e.shiftKey ? (e.ctrlKey || e.metaKey ? 'block' : 'plot') : null);
-canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, btn: e.button }; });
+const modeOf = (e) => (e.shiftKey ? (e.ctrlKey || e.metaKey ? 'block' : 'plot') : game.fill);
+// A tap is one pointer that barely moved; a second finger (pinch / pan) cancels it.
+const activePointers = new Set();
+canvas.addEventListener('pointerdown', (e) => {
+  activePointers.add(e.pointerId);
+  down = activePointers.size > 1 ? null : { x: e.clientX, y: e.clientY, btn: e.button, slop: e.pointerType === 'mouse' ? 5 : 12 };
+});
+for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, (e) => { activePointers.delete(e.pointerId); if (type === 'pointercancel') down = null; });
 canvas.addEventListener('pointermove', (e) => { pointer = { x: e.clientX, y: e.clientY }; modeHeld = modeOf(e); });
 canvas.addEventListener('pointerleave', () => { pointer = null; });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
-  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), btn = down.btn;
+  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), { btn, slop } = down;
   down = null;
-  if (moved > 5 || btn !== 0) return;
+  if (moved > slop || btn !== 0) return;
   pointer = { x: e.clientX, y: e.clientY };
   modeHeld = modeOf(e);
   computeHover();
@@ -693,6 +711,8 @@ canvas.addEventListener('pointerup', (e) => {
   else if (game.tool === 'paint') record('Paint', () => paintAt(x, y, z, mode));
   else { setActive(hover.cell.b); ui.inspect(hover.cell); }
 });
+// Touch has no hover: drop the preview once the tap is handled.
+canvas.addEventListener('pointerup', (e) => { if (e.pointerType !== 'mouse') pointer = null; });
 canvas.addEventListener('dblclick', () => {
   const tool = game.tool;
   game.tool = 'inspect';

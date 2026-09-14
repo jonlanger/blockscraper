@@ -1,5 +1,6 @@
 // City layout: a global cell grid of city blocks (two back-to-back rows of plots) separated
-// by streets. Buildings may span any plots inside a city block; streets stay open.
+// by streets. Buildings may span any plots and streets: a building on a street closes that stretch
+// (see City.closed), and upper floors may also span over a street that stays open.
 import { CELL } from './catalog.js';
 import { tk } from './terrain.js';
 
@@ -52,10 +53,11 @@ export class Layout {
     // Owned by the city: expanded land beyond the grid (tk -> {x, z}) and map-block roads (tk -> {x, z, t}).
     this.extra = null;
     this.roads = null;
-    this.ext = { x0: 0, z0: 0, x1: this.sizeX - 1, z1: this.sizeZ - 1 };
+    this.closed = null; // street blocks covered by a building: tk -> { x, z, n }
+    this.ext ={ x0: 0, z0: 0, x1: this.sizeX - 1, z1: this.sizeZ - 1 };
   }
 
-  attach(extra, roads) { this.extra = extra; this.roads = roads; this.recalcExt(); }
+  attach(extra, roads, closed = null) { this.extra = extra; this.roads = roads; this.closed = closed; this.recalcExt(); }
   // Bounds of all ground (grid + expanded land), in cells.
   recalcExt() {
     const e = { x0: 0, z0: 0, x1: this.sizeX - 1, z1: this.sizeZ - 1 };
@@ -70,6 +72,9 @@ export class Layout {
   isGridStreet(gx, gz) { return this.inGrid(gx, gz) && (this.isStreetX(gx) || this.isStreetZ(gz)); }
   // City streets plus map-block roads, paths and lots: anything buildings open onto.
   isStreet(gx, gz) { return this.isGridStreet(gx, gz) || !!this.roads?.has(tk(gx, gz)); }
+  // Streets (and roads) that no building has closed.
+  isOpenStreet(gx, gz) { return this.isStreet(gx, gz) && !this.closed?.has(tk(gx, gz)); }
+  isOpenGridStreet(gx, gz) { return this.isGridStreet(gx, gz) && !this.closed?.has(tk(gx, gz)); }
   buildable(gx, gz) { return this.inMap(gx, gz) && !this.isStreet(gx, gz); }
   hBand(gz) { return this.inGrid(0, gz) && this.isStreetZ(gz) ? Math.floor(gz / this.Q) : -1; }
   wx(gx) { return this.ox + gx * CELL; }
@@ -90,14 +95,14 @@ export class Layout {
 
   // Direction index (0:+x 1:-x 2:+z 3:-z) of an adjacent street, preferring east–west streets.
   streetDir(gx, gz) {
-    for (const [d, dx, dz] of [[2, 0, 1], [3, 0, -1], [0, 1, 0], [1, -1, 0]]) if (this.isStreet(gx + dx, gz + dz)) return d;
+    for (const [d, dx, dz] of [[2, 0, 1], [3, 0, -1], [0, 1, 0], [1, -1, 0]]) if (this.isOpenStreet(gx + dx, gz + dz)) return d;
     return -1;
   }
   // East–west street band index touching this cell (or -1), with the side it's on (+1 south / -1 north).
   touchingHBand(gx, gz) {
-    if (this.isStreet(gx, gz)) return null;
-    if (this.inGrid(gx, gz + 1) && this.isStreetZ(gz + 1)) return { band: this.hBand(gz + 1), side: 1 };
-    if (this.inGrid(gx, gz - 1) && this.isStreetZ(gz - 1)) return { band: this.hBand(gz - 1), side: -1 };
+    if (this.isOpenStreet(gx, gz)) return null;
+    if (this.isOpenGridStreet(gx, gz + 1) && this.isStreetZ(gz + 1)) return { band: this.hBand(gz + 1), side: 1 };
+    if (this.isOpenGridStreet(gx, gz - 1) && this.isStreetZ(gz - 1)) return { band: this.hBand(gz - 1), side: -1 };
     return null;
   }
 }

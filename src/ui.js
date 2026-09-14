@@ -180,6 +180,8 @@ export function initUI(game, A) {
   document.querySelectorAll('[data-tool]').forEach((b) => (b.onclick = () => A.setTool(b.dataset.tool)));
   document.querySelectorAll('[data-speed]').forEach((b) => (b.onclick = () => A.setSpeed(+b.dataset.speed)));
   document.querySelectorAll('[data-brush]').forEach((b) => (b.onclick = () => A.setBrushSize(+b.dataset.brush)));
+  document.querySelectorAll('[data-fill]').forEach((b) => (b.onclick = () => A.setFill(b.dataset.fill)));
+  $('btn-new-menu').onclick = () => $('btn-new').onclick();
   $('v-cut').onclick = () => A.toggleCutaway();
   $('v-ug').onclick = () => A.toggleUnderground();
   $('v-iso').onclick = () => A.toggleIsolate();
@@ -255,6 +257,8 @@ export function initUI(game, A) {
     renderDecor();
     renderMap();
     document.querySelectorAll('[data-brush]').forEach((b) => b.classList.toggle('on', +b.dataset.brush === game.brushSize));
+    const fillLabels = game.brush === 'decor' ? ['Wall', 'Floor', 'Building'] : ['Single', 'Plot', 'Block'];
+    document.querySelectorAll('[data-fill]').forEach((b, i) => { b.textContent = fillLabels[i]; b.classList.toggle('on', (b.dataset.fill || null) === game.fill); });
     $('v-cut').classList.toggle('on', game.cutaway);
     $('v-ug').classList.toggle('on', game.underground);
     $('v-iso').classList.toggle('on', game.isolate);

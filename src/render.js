@@ -128,6 +128,12 @@ export class CityRenderer {
       const egg = city.eggs.get(key) || null;
       const below = city.get(c.x, c.y - 1, c.z);
       if (c.y > 0 && below && MODULES[below.m].open && !mod.topper) G(pre + 'always').m.bevel(x0 + 2, y0 + 0.04, z0 + 2, 4, 0.12, 4, [S.trim, PAT.CONCRETE], 0.02);
+      else if (c.y > 0 && !below && !mod.open && !mod.topper) {
+        // Floor spanning a street: a soffit with downlights over the traffic.
+        const g = G(pre + 'always');
+        g.m.bevel(x0 + 2, y0 + 0.08, z0 + 2, 4, 0.2, 4, [S.trim, PAT.CONCRETE], 0.03);
+        for (const [lx, lz] of [[1, 1], [3, 1], [1, 3], [3, 3]]) g.l.box(x0 + lx, y0 - 0.03, z0 + lz, 0.4, 0.02, 0.4, 0xfff4dc);
+      }
 
       if (mod.topper) {
         const nb = DIRS.map(([dx, dz]) => city.get(c.x + dx, c.y, c.z + dz)?.m === c.m);
@@ -159,7 +165,7 @@ export class CityRenderer {
         F.set(x0 + 2 + dx * 2, y0, z0 + 2 + dz * 2, dx, dz);
         if (c.y < 0) { retainingWall(G(pre + 'ug' + d), F); continue; }
         const rx = dz, rz = -dx;
-        const street = L.isStreet(c.x + dx, c.z + dz) || !L.inMap(c.x + dx, c.z + dz);
+        const street = L.isOpenStreet(c.x + dx, c.z + dz) || !L.inMap(c.x + dx, c.z + dz);
         const ctx = {
           level: c.y, isTop: topOpen, isGround: c.y === 0, street,
           isEntrance: c.y === 0 && street && !!mod.entrance,

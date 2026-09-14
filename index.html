@@ -44,6 +44,7 @@
     <div class="menu-wrap">
       <button id="btn-more" class="icon-btn" title="More" aria-label="More options" aria-haspopup="menu" aria-expanded="false"><i data-icon="ellipsis"></i></button>
       <div id="menu" class="panel menu hidden" role="menu">
+        <button id="btn-new-menu" class="narrow-new" role="menuitem"><i data-icon="map-plus"></i><span>New city</span></button>
         <button id="btn-info" class="narrow-info" role="menuitem"><i data-icon="panel-right"></i><span>Building info</span></button>
         <button id="btn-eggs" role="menuitem"><i data-icon="egg"></i><span>Easter eggs</span><b id="eggs-count">0/14</b></button>
         <button id="btn-sandbox" role="menuitemcheckbox" aria-checked="false"><i data-icon="infinity"></i><span>Sandbox · unlimited funds</span><i data-icon="check" class="tick"></i></button>
@@ -62,6 +63,10 @@
       <button data-tool="inspect"><i data-icon="mouse-pointer-2"></i>Select <kbd>I</kbd></button>
     </div>
     <div class="brush-wrap"><span class="lbl">Current brush</span><div id="brush" class="brush"></div></div>
+    <div class="brush-size" role="group" aria-label="Fill area">
+      <span class="lbl">Fill</span>
+      <button data-fill="" title="One block or wall per click">Single</button><button data-fill="plot" title="Whole plot or floor per click (Shift+click)">Plot</button><button data-fill="block" title="Whole city block or building per click (Ctrl/⌘+Shift+click)">Block</button>
+    </div>
     <h3>1 · Architectural style &amp; colorway</h3>
     <div id="styles" class="accs"></div>
     <h3>2 · Building blocks</h3>
@@ -123,7 +128,7 @@
         <label>City block size<select id="nc-lots"></select></label>
         <label>Plot size<select id="nc-plot"></select></label>
       </div>
-      <p class="muted small">Buildings and parks can span plots freely within a city block — there's no footprint or depth limit.</p>
+      <p class="muted small">Buildings and parks can span plots, city blocks and streets — there's no footprint or depth limit.</p>
       <div class="btnrow"><button id="nc-cancel">Cancel</button><button id="nc-go" class="primary">Create city</button></div>
     </div>
   </div>
@@ -136,9 +141,11 @@
     <ul>
       <li>Open a <b>style</b>, choose a <b>colorway</b>, then pick a <b>block</b>.</li>
       <li><b>Click</b> a plot or block face to place. <b>Shift+click</b> fills the plot · <b>Ctrl/⌘+Shift+click</b> fills the whole city block.</li>
-      <li>Buildings join automatically when blocks touch — build across plots, as wide and as deep as you like.</li>
+      <li>Buildings join automatically when blocks touch — build across plots and streets, as wide and as deep as you like.</li>
+      <li><b>Streets</b> don't stop a building: build on one to close that stretch (traffic turns back), or keep it open and span upper floors over it from a building beside it.</li>
       <li><b>Double-click</b> (or Select tool) chooses a building · <b>Tab</b> cycles · <b>Z</b> frames it · <b>O</b> focuses on it alone.</li>
       <li><b>Alt+click</b> copies a block's type and style · <b>R</b> stacks the top floor.</li>
+      <li><b>Touch:</b> drag to orbit, pinch to zoom, two-finger drag to pan, tap to build. Use <b>Fill</b> in the blocks panel for plot, city block, floor or building fills.</li>
       <li><b>Ctrl/⌘+Z</b> undoes an edit · <b>Ctrl/⌘+Shift+Z</b> (or <b>Ctrl+Y</b>) redoes it.</li>
       <li><b>Q / E</b> build level (any depth) · <b>PgUp / PgDn</b> slice floors · <b>F</b> cutaway · <b>U</b> underground · <b>N</b> city view.</li>
     </ul>

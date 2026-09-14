@@ -40,7 +40,9 @@ export class City {
     this.natureCells = [];
     this.land = new Map();        // expanded ground beyond the grid: tk(x, z) -> { x, z }
     this.roads = new Map();       // map-block roads & paths: tk(x, z) -> { x, z, t }
-    layout.attach(this.land, this.roads);
+    this.closed = new Map();      // columns with a ground-level or basement block: tk(x, z) -> { x, z, n }
+    this.streetVersion = 0;       // bumps when a city street is closed or reopened
+    layout.attach(this.land, this.roads, this.closed);
   }
 
   key(x, y, z) { return `${x},${y},${z}`; }
@@ -58,6 +60,7 @@ export class City {
     const c = { x, y, z, m, s, v, b: prev ? prev.b : 0 };
     if (prev?.o && prev.m === m) c.o = prev.o; // restyling keeps the ornaments
     this.cells.set(k, c);
+    if (!prev && y <= 0) this.shut(x, z, 1);
     const ck = this.chunkOf(x, z);
     if (!this.chunkCells.has(ck)) this.chunkCells.set(ck, new Set());
     this.chunkCells.get(ck).add(k);
@@ -76,21 +79,33 @@ export class City {
     this.markAround(x, z);
   }
 
-  // Does this skybridge hang from something — a building block beside it, or a chain of skybridges that
-  // reaches one (or stands on a block)? skip: a block key to treat as already removed.
+  // A block at or below street level on a street closes it. Counts blocks per column so reopening waits
+  // for the last one to go.
+  shut(x, z, d) {
+    const k = tk(x, z), r = this.closed.get(k), n = (r?.n || 0) + d;
+    if (n > 0) this.closed.set(k, { x, z, n }); else this.closed.delete(k);
+    if (!r === n > 0 && this.layout.isStreet(x, z)) {
+      if (this.layout.isGridStreet(x, z)) this.streetVersion++;
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) this.terrainDirty.add(chunkKey(x + dx, z + dz));
+    }
+  }
+
+  // Is this hanging block (a skybridge, or a floor spanning a street, with nothing below) held up by a
+  // standing block beside it — directly or through a chain of other hanging blocks?
+  // skip: a block key to treat as already removed.
   bridgeHeld(x, y, z, skip = null) {
+    const stands = (cx, cz) => { const k = this.key(cx, y - 1, cz); return y <= 0 || (k !== skip && this.cells.has(k)); };
+    if (stands(x, z)) return true;
     const seen = new Set([this.key(x, y, z)]), stack = [[x, z]];
     while (stack.length) {
       const [cx, cz] = stack.pop();
-      if (this.cells.has(this.key(cx, y - 1, cz))) return true;
       for (const [dx, , dz] of N6.slice(0, 4)) {
         const k = this.key(cx + dx, y, cz + dz);
         if (k === skip || seen.has(k)) continue;
         const n = this.cells.get(k);
-        if (!n) continue;
-        const m = MODULES[n.m];
-        if (!m.bridge) { if (!m.park && !m.topper) return true; continue; }
+        if (!n || MODULES[n.m].park || MODULES[n.m].topper) continue;
         seen.add(k);
+        if (stands(n.x, n.z)) return true;
         stack.push([n.x, n.z]);
       }
     }
@@ -101,6 +116,7 @@ export class City {
     const k = this.key(x, y, z);
     this.touch('cells', k, [x, y, z]);
     if (!this.cells.delete(k)) return;
+    if (y <= 0) this.shut(x, z, -1);
     this.chunkCells.get(this.chunkOf(x, z))?.delete(k);
     this.markAround(x, z);
   }
@@ -189,6 +205,7 @@ export class City {
     this.layout.recalcExt();
     this.terrainVersion++;
     this.cells.clear();
+    if (this.closed.size) { this.closed.clear(); this.streetVersion++; }
     this.chunkCells.clear();
     this.names.clear();
     this.buildings.clear();
@@ -277,7 +294,9 @@ export class City {
   canPlace(x, y, z, mid) {
     const L = this.layout, mod = MODULES[mid];
     if (!L.inMap(x, z)) return 'Outside the map';
-    if (L.isStreet(x, z)) return "That's a street — build on the plots";
+    const overStreet = L.isStreet(x, z), band = L.isGridStreet(x, z) ? L.hBand(z) : -1;
+    if (band >= 0 && (y === -1 || y === -2)) return 'The subway tunnel runs under this street';
+    if (band >= 0 && band === L.railBand && (y === -3 || y === -4)) return 'The rail tunnel runs under this street';
     const land = this.terrain.get(tk(x, z));
     if (land && TERRAIN[land.t].group === 'water') return "That's water — use Clear Terrain in Map blocks first";
     if (land && land.h !== 0) return 'The land is sloped here — Level it in Map blocks first';
@@ -295,8 +314,13 @@ export class City {
     }
     const below = this.get(x, y - 1, z);
     if (y > 0 && !below) {
-      if (!mod.bridge) return 'Needs a block underneath';
-      if (!this.bridgeHeld(x, y, z)) return 'A skybridge must reach out from a building beside it (or another skybridge)';
+      // Hanging blocks: skybridges anywhere, and any floor spanning over a street.
+      if (!mod.bridge && !overStreet) return 'Needs a block underneath';
+      if (mod.topper) return 'Roofs need a solid block below';
+      if (!this.bridgeHeld(x, y, z)) return mod.bridge ? 'A skybridge must reach out from a building beside it (or another skybridge)' : 'Floors over a street must reach out from a building beside them';
+      const side = N6.slice(0, 4).map(([dx, , dz]) => this.get(x + dx, y, z + dz)).find((n) => n && !MODULES[n.m].park);
+      const B = side && this.buildings.get(side.b);
+      if (B?.stats && !B.park && y > B.stats.heightLimit) return `Height limit is Floor ${B.stats.heightLimit} — add Foundation Piles underground`;
     } else if (y > 0) {
       const bm = MODULES[below.m];
       if (bm.topper) return "Can't build on top of a roof or crown";
@@ -321,7 +345,8 @@ export class City {
     const key = this.key(x, y, z);
     for (const [dx, , dz] of N6.slice(0, 4)) {
       const n = this.get(x + dx, y, z + dz);
-      if (n && MODULES[n.m].bridge && !this.bridgeHeld(n.x, n.y, n.z, key)) return 'A skybridge hangs from this block — remove the bridge first';
+      if (!n || y <= 0 || this.get(n.x, y - 1, n.z) || this.bridgeHeld(n.x, n.y, n.z, key)) continue;
+      return MODULES[n.m].bridge ? 'A skybridge hangs from this block — remove the bridge first' : 'Floors over the street hang from this block — remove them first';
     }
     if (c.m === 'foundation') {
       const B = this.buildings.get(c.b);
@@ -438,7 +463,7 @@ export class City {
     for (const [x, z] of data.land || []) if (!this.layout.inGrid(x, z)) this.setLand(x, z, true);
     for (const [x, z, t] of data.roads || []) if (TERRAIN[t]?.group === 'streets' && this.layout.inMap(x, z) && !this.layout.isGridStreet(x, z)) this.setRoad(x, z, t);
     for (const [x, y, z, m, s, v, o] of data.cells) {
-      if (!MODULES[m] || !STYLES[s] || !this.layout.buildable(x, z)) continue;
+      if (!MODULES[m] || !STYLES[s] || !this.layout.inMap(x, z)) continue;
       const c = this.set(x, y, z, m, s, v || 0);
       if (Array.isArray(o) && o.length === 4 && o.some((id) => DECOR[id])) c.o = o.map((id) => (DECOR[id] && !DECOR[id].remove ? id : null));
     }
