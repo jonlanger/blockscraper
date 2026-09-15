@@ -3,6 +3,7 @@
 import { CELL, MAX_LEVEL, MODULES, STYLES, TERRAIN, DECOR, levelName, DEEP, isHollow } from './catalog.js';
 import { tk, chunkKey } from './terrain.js';
 import { hash } from './geo.js';
+import { SEGMENT_TYPES, CROSSING_TYPES } from './layout.js';
 
 export const CHUNK = 8;
 const N6 = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
@@ -13,13 +14,16 @@ const MODULE_INDEX = new Map(Object.keys(MODULES).map((id, i) => [id, i + 1]));
 // change redraws every block of the park (not just the chunks around the edit).
 const parkSig = (list) => { let h = 0; for (const c of list) h = (h + Math.floor(hash(c.x, c.z, MODULE_INDEX.get(c.m)) * 4294967296)) % 4294967296; return `${list.length}:${h}`; };
 
-const EDIT_KINDS = ['cells', 'terrain', 'land', 'roads'];
+const EDIT_KINDS = ['cells', 'terrain', 'land', 'roads', 'streets'];
 const snapshot = (kind, r) => {
   if (!r) return null;
   if (kind === 'cells') return { m: r.m, s: r.s, v: r.v || 0, b: r.b, o: r.o ? [...r.o] : null };
   if (kind === 'terrain') return { t: r.t, h: r.h };
-  return kind === 'roads' ? r.t : true;
+  if (kind === 'streets') return r;
+  if (kind === 'roads') return r.s ? [r.t, r.s] : r.t;
+  return true;
 };
+const SCENIC_STREETS = new Set(['median', 'pedestrian', 'plaza']);
 
 export class City {
   constructor(layout) {
@@ -41,8 +45,10 @@ export class City {
     this.land = new Map();        // expanded ground beyond the grid: tk(x, z) -> { x, z }
     this.roads = new Map();       // map-block roads & paths: tk(x, z) -> { x, z, t }
     this.closed = new Map();      // columns with a ground-level or basement block: tk(x, z) -> { x, z, n }
-    this.streetVersion = 0;       // bumps when a city street is closed or reopened
-    layout.attach(this.land, this.roads, this.closed);
+    this.streets = new Map();     // city street pieces reconfigured from the default: key -> type (see Layout)
+    this.streetVersion = 0;       // bumps when a city street is closed, reopened or reconfigured
+    this.roadVersion = 0;         // bumps when map-block roads change (traffic reroutes)
+    layout.attach(this.land, this.roads, this.closed, this.streets);
   }
 
   key(x, y, z) { return `${x},${y},${z}`; }
@@ -84,6 +90,7 @@ export class City {
   shut(x, z, d) {
     const k = tk(x, z), r = this.closed.get(k), n = (r?.n || 0) + d;
     if (n > 0) this.closed.set(k, { x, z, n }); else this.closed.delete(k);
+    if (!r === n > 0 && !this.layout.inGrid(x, z)) this.terrainVersion++; // edge trees clear or return
     if (!r === n > 0 && this.layout.isStreet(x, z)) {
       if (this.layout.isGridStreet(x, z)) this.streetVersion++;
       for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) this.terrainDirty.add(chunkKey(x + dx, z + dz));
@@ -139,13 +146,33 @@ export class City {
     this.terrainVersion++;
   }
 
-  // Roads join their neighbors and buildings open onto them, so redraw both around it.
-  setRoad(x, z, t) {
+  // Roads join their neighbors and buildings open onto them, so redraw both around it. s: the street or
+  // intersection type of a 'road' block (see Layout.roadNet), null for the default.
+  setRoad(x, z, t, s = null) {
     const k = tk(x, z);
     this.touch('roads', k, [x, z]);
-    if (t) this.roads.set(k, { x, z, t }); else if (!this.roads.delete(k)) return;
+    if (t) this.roads.set(k, s ? { x, z, t, s } : { x, z, t }); else if (!this.roads.delete(k)) return;
+    this.layout.net = null;
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) this.terrainDirty.add(chunkKey(x + dx, z + dz));
     this.markAround(x, z);
+    this.terrainVersion++;
+    this.roadVersion++;
+  }
+
+  // City street piece (see Layout.pieceAt); t null restores the default. Facades, map roads and the
+  // ground all read the street, so redraw everything around the piece.
+  setStreet(k, t) {
+    this.touch('streets', k, k);
+    if (t) { if (this.streets.get(k) === t) return; this.streets.set(k, t); } else if (!this.streets.delete(k)) return;
+    const L = this.layout, r = L.pieceBounds(k);
+    L.recalcStreets();
+    for (let cx = Math.floor((r.x0 - 1) / CHUNK); cx <= Math.floor((r.x1 + 1) / CHUNK); cx++) {
+      for (let cz = Math.floor((r.z0 - 1) / CHUNK); cz <= Math.floor((r.z1 + 1) / CHUNK); cz++) {
+        this.dirtyChunks.add(`${cx},${cz}`);
+        this.terrainDirty.add(chunkKey(cx * CHUNK, cz * CHUNK));
+      }
+    }
+    this.streetVersion++;
     this.terrainVersion++;
   }
 
@@ -153,7 +180,7 @@ export class City {
   // Between beginEdit() and endEdit(), the first change to each block or map cell keeps its prior state.
   // endEdit() pairs those with the current states into a reversible edit, or null if nothing changed.
   beginEdit() {
-    this.rec = { cells: new Map(), terrain: new Map(), land: new Map(), roads: new Map(), names: new Map(this.names) };
+    this.rec = { cells: new Map(), terrain: new Map(), land: new Map(), roads: new Map(), streets: new Map(), names: new Map(this.names) };
   }
 
   touch(kind, k, pos) {
@@ -181,6 +208,7 @@ export class City {
 
   // Put an edit's blocks and map cells back to their states before (side 0) or after (side 1) it.
   applyEdit(edit, side) {
+    for (const [k, ...states] of edit.streets || []) this.setStreet(k, states[side]);
     for (const [[x, y, z], ...states] of edit.cells) {
       const st = states[side];
       if (!st) { this.remove(x, y, z); continue; }
@@ -189,7 +217,7 @@ export class City {
       if (st.o) c.o = [...st.o]; else delete c.o;
     }
     for (const [[x, z], ...states] of edit.land) this.setLand(x, z, !!states[side]);
-    for (const [[x, z], ...states] of edit.roads) this.setRoad(x, z, states[side]);
+    for (const [[x, z], ...states] of edit.roads) { const st = states[side]; if (Array.isArray(st)) this.setRoad(x, z, st[0], st[1]); else this.setRoad(x, z, st); }
     for (const [[x, z], ...states] of edit.terrain) this.setTerrain(x, z, states[side]);
     this.recompute();
     for (const [id, name] of edit.names[side]) if (this.buildings.has(id)) this.names.set(id, name);
@@ -201,8 +229,11 @@ export class City {
     this.terrain.clear();
     for (const r of this.roads.values()) this.terrainDirty.add(chunkKey(r.x, r.z));
     this.roads.clear();
+    this.roadVersion++;
+    this.layout.net = null;
     this.land.clear();
     this.layout.recalcExt();
+    if (this.streets.size) { this.streets.clear(); this.layout.recalcStreets(); this.streetVersion++; }
     this.terrainVersion++;
     this.cells.clear();
     if (this.closed.size) { this.closed.clear(); this.streetVersion++; }
@@ -274,7 +305,12 @@ export class City {
     this.parkCells = [];
     for (const B of this.buildings.values()) if (B.park) this.parkCells.push(...B.cells);
     this.natureCells = [...this.terrain.values()].filter((r) => TERRAIN[r.t].scenic);
-    for (const r of this.roads.values()) if (r.t === 'boulevard') this.natureCells.push(r);
+    for (const r of this.roads.values()) if (SCENIC_STREETS.has(r.s)) this.natureCells.push(r);
+    for (const [k, t] of this.streets) {
+      if (!SCENIC_STREETS.has(t)) continue;
+      const b = this.layout.pieceBounds(k);
+      this.natureCells.push({ x: (b.x0 + b.x1) >> 1, z: (b.z0 + b.z1) >> 1 });
+    }
     for (const B of this.buildings.values()) B.stats = this.statsFor(B);
   }
 
@@ -294,7 +330,7 @@ export class City {
   canPlace(x, y, z, mid) {
     const L = this.layout, mod = MODULES[mid];
     if (!L.inMap(x, z)) return 'Outside the map';
-    const overStreet = L.isStreet(x, z), band = L.isGridStreet(x, z) ? L.hBand(z) : -1;
+    const overStreet = L.isStreet(x, z), band = L.isGridBand(x, z) ? L.hBand(z) : -1;
     if (band >= 0 && (y === -1 || y === -2)) return 'The subway tunnel runs under this street';
     if (band >= 0 && band === L.railBand && (y === -3 || y === -4)) return 'The rail tunnel runs under this street';
     const land = this.terrain.get(tk(x, z));
@@ -455,13 +491,20 @@ export class City {
     const names = [];
     for (const B of this.buildings.values()) { const c = B.cells[0]; names.push([c.x, c.y, c.z, this.names.get(B.id)]); }
     return { cells: [...this.cells.values()].map((c) => (c.o ? [c.x, c.y, c.z, c.m, c.s, c.v || 0, c.o] : [c.x, c.y, c.z, c.m, c.s, c.v || 0])), names, terrain: [...this.terrain.values()].map((r) => [r.x, r.z, r.t, r.h]),
-      land: [...this.land.values()].map((r) => [r.x, r.z]), roads: [...this.roads.values()].map((r) => [r.x, r.z, r.t]) };
+      land: [...this.land.values()].map((r) => [r.x, r.z]), roads: [...this.roads.values()].map((r) => (r.s ? [r.x, r.z, r.t, r.s] : [r.x, r.z, r.t])), streets: [...this.streets] };
   }
 
   load(data) {
     this.clear();
+    // Streets first: a removed street is buildable ground for the roads and terrain below.
+    for (const [k, t] of data.streets || []) if (this.layout.validPiece(k, t)) this.setStreet(k, t);
     for (const [x, z] of data.land || []) if (!this.layout.inGrid(x, z)) this.setLand(x, z, true);
-    for (const [x, z, t] of data.roads || []) if (TERRAIN[t]?.group === 'streets' && this.layout.inMap(x, z) && !this.layout.isGridStreet(x, z)) this.setRoad(x, z, t);
+    for (const [x, z, t0, s0] of data.roads || []) {
+      // Boulevards used to be their own road kind; they're pedestrian streets now.
+      const [t, s] = t0 === 'boulevard' ? ['road', 'pedestrian'] : [t0, s0];
+      if (TERRAIN[t]?.group !== 'streets' || !this.layout.inMap(x, z) || this.layout.isGridStreet(x, z)) continue;
+      this.setRoad(x, z, t, t === 'road' && s !== 'removed' && (SEGMENT_TYPES.has(s) || CROSSING_TYPES.has(s)) ? s : null);
+    }
     for (const [x, y, z, m, s, v, o] of data.cells) {
       if (!MODULES[m] || !STYLES[s] || !this.layout.inMap(x, z)) continue;
       const c = this.set(x, y, z, m, s, v || 0);

@@ -8,8 +8,8 @@ import { GeoBuilder, PAT, SHAPES, lathe, foliage, hash, rng } from './geo.js';
 import { part, mtx } from './kit.js';
 import { PartBatcher } from './batch.js';
 import { applyPatterns } from './patterns.js';
-import { shrubPart, lampPostPart, benchPart, bollardPart, pottedPlantPart, carParts, rbox } from './props.js';
-import { anyTreePart, duckPart, newsstandPart } from './props2.js';
+import { shrubPart, bollardPart, pottedPlantPart, carParts } from './props.js';
+import { anyTreePart, duckPart } from './props2.js';
 
 export const GROUND_Y = 0.02;   // top of the concrete plot slab
 export const WATER_Y = -0.18;   // water surface
@@ -73,16 +73,21 @@ export function terrainBlocked(city, x, z) {
   return null;
 }
 
-// Work out what a map block would change over `cells` (centered on cx, cz with brush radius r).
+// Work out what a map block would change over `cells`, brushed around the cell rectangle `rect`
+// ({ x0, x1, z0, z1 }: a point for a click, a line or area for a drag) with brush radius r.
 // Returns { out: [{ x, z, rec }], cost, err } without touching the city.
-export function planTerrain(city, id, cells, cx, cz, r = 0) {
+// opts.keepStreets: roads stop at city streets (and join them) instead of taking them over — for drags.
+export function planTerrain(city, id, cells, rect, r = 0, opts = {}) {
   const T = city.terrain, def = TERRAIN[id], out = [];
   if (def.group === 'land') return planLand(city, id, cells);
-  if (def.group === 'streets') return planRoads(city, id, cells);
+  if (def.group === 'streets') return planRoads(city, id, cells, opts);
+  if (def.group === 'grid') return planStreets(city, id, cells);
   let err = null, cost = 0;
   for (const [x, z] of cells) {
-    if (id === 'clear' && city.roads.has(tk(x, z))) { out.push({ kind: 'road', x, z, rec: null }); continue; }
-    const e = terrainBlocked(city, x, z);
+    // Land cover, water and elevation paint straight over map roads and paths.
+    const road = city.roads.has(tk(x, z));
+    if (id === 'clear' && road) { out.push({ kind: 'road', x, z, rec: null }); continue; }
+    const e = road ? (hasCells(city, x, z) ? 'Clear the buildings or parks here first' : null) : terrainBlocked(city, x, z);
     if (e) { err = err || e; continue; }
     const cur = T.get(tk(x, z)) || null, h0 = cur ? cur.h : 0;
     let next;
@@ -93,7 +98,11 @@ export function planTerrain(city, id, cells, cx, cz, r = 0) {
       let h = h0;
       if (id === 'raise') h = h0 + 1;
       else if (id === 'lower') h = h0 - 1;
-      else if (id === 'hill') { const d = Math.max(Math.abs(x - cx), Math.abs(z - cz)), rr = Math.max(2, r + 1); h = h0 + Math.round((2 + rr) * Math.max(0, 1 - d / rr)); }
+      else if (id === 'hill') {
+        // Rounded away from the rectangle: a hill for a click, a ridge along a dragged line.
+        const d = Math.max(rect.x0 - x, x - rect.x1, rect.z0 - z, z - rect.z1, 0), rr = Math.max(2, r + 1);
+        h = h0 + Math.round((2 + rr) * Math.max(0, 1 - d / rr));
+      }
       else if (id === 'mesa') h = Math.max(h0, 6);
       else if (id === 'level') h = 0;
       else if (id === 'smooth') {
@@ -106,6 +115,7 @@ export function planTerrain(city, id, cells, cx, cz, r = 0) {
       if (!cur && h === 0) continue;
     }
     if (cur ? next && next.t === cur.t && next.h === cur.h : !next) continue;
+    if (road) out.push({ kind: 'road', x, z, rec: null });
     out.push({ kind: 'terrain', x, z, rec: next });
     cost += def.group === 'elev' && id !== 'clear' ? def.cost * Math.max(1, Math.abs((next?.h ?? 0) - h0)) : def.cost;
   }
@@ -125,7 +135,7 @@ function planLand(city, id, cells) {
       want.set(tk(x, z), [x, z]);
     }
     // The grass margin around the grid already reads as the city's edge, so building out from it counts.
-    const margin = (x, z) => x >= -2 && z >= -2 && x <= L.sizeX + 1 && z <= L.sizeZ + 1;
+    const margin = (x, z) => L.inEdge(x, z);
     const inReach = (x, z) => x >= -LAND_REACH && z >= -LAND_REACH && x < L.sizeX + LAND_REACH && z < L.sizeZ + LAND_REACH;
     // Aiming out into space grows a causeway back to the existing ground, as wide as the brush.
     const E = L.ext;
@@ -149,32 +159,112 @@ function planLand(city, id, cells) {
     if (!out.length) err = err || 'This is already land — aim past the edge of the map';
   } else {
     for (const [x, z] of cells) {
-      if (!city.land.has(tk(x, z))) { if (L.inGrid(x, z)) err = err || 'The original city grid stays'; continue; }
-      if (city.roads.has(tk(x, z)) || city.terrain.has(tk(x, z))) { err = err || 'Clear the roads and terrain here first'; continue; }
+      if (!city.land.has(tk(x, z))) { if (L.inEdge(x, z)) err = err || 'The original city grid and its edge stay'; continue; }
       if (hasCells(city, x, z)) { err = err || 'Clear the buildings or parks here first'; continue; }
+      // Roads and terrain on it go with the land.
+      if (city.roads.has(tk(x, z))) out.push({ kind: 'road', x, z, rec: null });
+      if (city.terrain.has(tk(x, z))) out.push({ kind: 'terrain', x, z, rec: null });
       out.push({ kind: 'land', x, z, rec: false });
     }
   }
-  return { out, cost: out.length * TERRAIN[id].cost, err, count: out.length };
+  const count = out.filter((o) => o.kind === 'land').length;
+  return { out, cost: count * TERRAIN[id].cost, err, count };
 }
 
-// Roads & paths go on dry, level, empty ground (level land cover is replaced).
-function planRoads(city, id, cells) {
-  const L = city.layout, out = [];
+// Roads & paths go on any empty ground, replacing other roads and paths, land cover, water and slopes
+// (the ground levels under them). A city street under the brush gives way too: its whole stretch or
+// intersection becomes this road.
+function planRoads(city, id, cells, { keepStreets = false } = {}) {
+  const L = city.layout, out = [], seen = new Set(), pieces = new Set();
+  // A boulevard is a road set up as a pedestrian street (editable with the City streets tools).
+  const [t, s] = id === 'boulevard' ? ['road', 'pedestrian'] : [id, null];
   let err = null, cost = 0, count = 0;
-  for (const [x, z] of cells) {
-    if (!L.inMap(x, z)) { err = err || 'Expand the land here first'; continue; }
-    if (L.isGridStreet(x, z)) { err = err || "That's already a city street"; continue; }
-    if (hasCells(city, x, z)) { err = err || 'Clear the buildings or parks here first'; continue; }
-    const land = city.terrain.get(tk(x, z));
-    if (land && (TERRAIN[land.t].group === 'water' || land.h !== 0)) { err = err || 'Roads need dry, level land'; continue; }
-    if (city.roads.get(tk(x, z))?.t === id) continue;
-    if (land) out.push({ kind: 'terrain', x, z, rec: null });
-    out.push({ kind: 'road', x, z, rec: id });
+  const pave = (x, z) => {
+    const k = tk(x, z);
+    if (seen.has(k)) return;
+    seen.add(k);
+    if (hasCells(city, x, z)) { err = err || 'Clear the buildings or parks here first'; return; }
+    const cur = city.roads.get(k);
+    if (cur?.t === t && (!s || cur.s === s)) return; // repainting a road keeps how it's set up
+    if (city.terrain.has(k)) out.push({ kind: 'terrain', x, z, rec: null });
+    out.push({ kind: 'road', x, z, rec: t, s });
     cost += TERRAIN[id].cost;
     count++;
+  };
+  for (const [x, z] of cells) {
+    if (!L.inMap(x, z)) { err = err || 'Expand the land here first'; continue; }
+    if (!L.isGridStreet(x, z)) { pave(x, z); continue; }
+    if (keepStreets) continue;
+    const k = L.pieceAt(x, z);
+    if (pieces.has(k)) continue;
+    pieces.add(k);
+    out.push({ kind: 'street', k, rec: 'removed' });
+    const b = L.pieceBounds(k);
+    for (let px = b.x0; px <= b.x1; px++) for (let pz = b.z0; pz <= b.z1; pz++) pave(px, pz);
   }
-  return { out, cost, err, count };
+  const n = pieces.size, label = n ? `${count} blocks · replaces ${n} city street${n === 1 ? '' : 's'}` : undefined;
+  return { out, cost, err, count, label };
+}
+
+// City streets: each brush block picks the whole stretch or intersection it's on. Returns the pieces'
+// cell bounds as `area` for the preview.
+const STREET_TOOL = {
+  avenue: (seg, cur) => (seg || cur === 'removed' || cur === 'plaza' ? null : undefined),
+  oneway: (seg, cur) => (seg ? (cur === 'oneway' ? 'onewayrev' : 'oneway') : undefined),
+  median: (seg) => (seg ? 'median' : undefined),
+  bikeway: (seg) => (seg ? 'bikeway' : undefined),
+  pedestrian: (seg) => (seg ? 'pedestrian' : 'plaza'),
+  nostreet: () => 'removed',
+  signals: (seg) => (seg ? undefined : null),
+  stop: (seg) => (seg ? undefined : 'stop'),
+  roundabout: (seg) => (seg ? undefined : 'roundabout'),
+  scramble: (seg) => (seg ? undefined : 'scramble'),
+  xplaza: (seg) => (seg ? undefined : 'plaza'),
+};
+function planStreets(city, id, cells) {
+  const L = city.layout, def = TERRAIN[id], out = [], area = [], seen = new Set();
+  let err = null, cost = 0, segs = 0, crossings = 0;
+  for (const [x, z] of cells) {
+    const k = L.pieceAt(x, z);
+    if (!k) {
+      // A painted road: the stretch or junction it's part of, set on its blocks.
+      const mp = city.roads.get(tk(x, z))?.t === 'road' && L.roadNet().pieceOf.get(tk(x, z));
+      if (!mp) { err = err || 'Aim at a street or intersection'; continue; }
+      if (seen.has(mp)) continue;
+      seen.add(mp);
+      const seg = mp.kind === 'seg', cur = L.roadType(mp), next = STREET_TOOL[id](seg, cur);
+      if (next === undefined) { err = err || (def.piece === 'x' ? `${def.name} go on intersections` : `${def.name} go on the streets between intersections`); continue; }
+      if (next === cur) { err = err || `Already set to ${def.name}`; continue; }
+      const narrow = seg ? mp.band.w < 3 : Math.min(mp.x1 - mp.x0, mp.z1 - mp.z0) < 2;
+      if (narrow && ['median', 'bikeway', 'roundabout'].includes(next)) { err = err || `Too narrow for ${def.name} — paint the road 3 blocks wide`; continue; }
+      for (const [cx, cz] of mp.cells) {
+        out.push(next === 'removed' ? { kind: 'road', x: cx, z: cz, rec: null } : { kind: 'road', x: cx, z: cz, rec: 'road', s: next });
+        area.push([cx, cz]);
+      }
+      cost += def.cost;
+      if (seg) segs++; else crossings++;
+      continue;
+    }
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const seg = k[0] !== 'x', cur = city.streets.get(k) || null, next = STREET_TOOL[id](seg, cur);
+    if (next === undefined) { err = err || (def.piece === 'x' ? `${def.name} go on intersections` : `${def.name} go on the streets between intersections`); continue; }
+    if (next === cur) { err = err || `Already set to ${def.name}`; continue; }
+    const b = L.pieceBounds(k);
+    if (cur === 'removed') {
+      // Bringing a street back clears the map blocks painted on it.
+      for (let cx = b.x0; cx <= b.x1; cx++) for (let cz = b.z0; cz <= b.z1; cz++) {
+        if (city.terrain.has(tk(cx, cz))) out.push({ kind: 'terrain', x: cx, z: cz, rec: null });
+        if (city.roads.has(tk(cx, cz))) out.push({ kind: 'road', x: cx, z: cz, rec: null });
+      }
+    }
+    out.push({ kind: 'street', k, rec: next });
+    area.push([b.x0, b.z0], [b.x1, b.z1]);
+    cost += def.cost;
+    if (seg) segs++; else crossings++;
+  }
+  const label = [[segs, 'street'], [crossings, 'intersection']].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : 's'}`).join(' · ') || 'no change';
+  return { out, cost, err, count: segs + crossings, area, label };
 }
 
 // ---------- decor parts ----------
@@ -231,11 +321,6 @@ const bikeGlyphPart = () => part('tr-bikeglyph', (L) => {
   w.put(SHAPES.box, -0.18, 0, 0.06, 0.5, 0.008, 0.04, 0, 0.6, 0);
   w.put(SHAPES.box, 0.2, 0, 0.06, 0.48, 0.008, 0.04, 0, -0.6, 0);
   w.put(SHAPES.box, 0.02, 0, -0.14, 0.5, 0.008, 0.04);
-});
-const planterPart = (k) => part(`tr-planter:${k}`, (L) => {
-  L('m', 0x9a968e, PAT.ASHLAR).geo(rbox(1.5, 0.45, 1.5, 0.08), mtx(0, 0.225, 0));
-  L('m', 0x3b2a1e, PAT.GRAVEL).bx(-0.64, 0.44, -0.64, 0.64, 0.46, 0.64);
-  L('m', [0x4f7f3a, 0x5e8c41, 0x3f6f35, 0x6a9a4a][k], PAT.GRASS).geo(foliage(k * 0.2), mtx(0.35, 0.56, -0.3, 0, k, 0, 0.35, 0.18, 0.35));
 });
 const CAR_COLORS = [0xc0392b, 0x2c3e50, 0xecf0f1, 0x27ae60, 0xf1c40f, 0x7f8c8d, 0x2980b9, 0x111111];
 const CROPS = [[0xd9b85a, 0.45], [0x6f9a3a, 0.9], [0x9a7cc4, 0.35], [0x7cb342, 0.22]];
@@ -302,7 +387,7 @@ export class TerrainRenderer {
 
     for (let x = cx * TCHUNK; x < (cx + 1) * TCHUNK; x++) for (let z = cz * TCHUNK; z < (cz + 1) * TCHUNK; z++) {
       const rd = city.roads.get(tk(x, z));
-      if (rd) this.buildRoad(rd, x, z, L.wx(x), L.wz(z), ex, bat);
+      if (rd && rd.t !== 'road') this.buildRoad(rd, x, z, L.wx(x), L.wz(z), ex, bat); // streets are drawn by World
       const r = T.get(tk(x, z));
       if (!r) continue;
       const look = LOOK[r.t], water = isWater(r.t), x0 = L.wx(x), z0 = L.wz(z);
@@ -352,15 +437,14 @@ export class TerrainRenderer {
     this.chunks.set(ck, { group, pick });
   }
 
-  // Roads, bike paths, boulevards, lanes and parking: flat street-level surfaces that join their own
-  // kind and the city streets, with curbs, sidewalks or bollards where they meet anything else.
+  // Bike paths, lanes and parking: flat street-level surfaces that join their own kind, streets and the city
+  // streets, with curbs or bollards where they meet anything else. (Roads are streets, drawn by World.)
   buildRoad(rd, x, z, x0, z0, g, bat) {
     const city = this.city, L = city.layout, R = rng(hash(x, z, 57) + 0.02), Y = GROUND_Y;
     const nb = N4.map(([dx, dz]) => city.roads.get(tk(x + dx, z + dz))?.t || (L.isOpenGridStreet(x + dx, z + dz) ? 'street' : null));
-    const wheels = (k) => !!k && k !== 'boulevard';
+    const wheels = (k) => !!k;
     const alongX = !!(nb[0] || nb[1]), alongZ = !!(nb[2] || nb[3]);
     const ax = alongZ && !alongX ? 'z' : 'x', straight = alongX !== alongZ;
-    const across = ax === 'x' ? [2, 3] : [0, 1]; // [high-v edge, low-v edge]
     const box = (a0, a1, y0, y1, b0, b1, col) => g.box(x0 + (a0 + a1) / 2, Y + (y0 + y1) / 2, z0 + (b0 + b1) / 2, a1 - a0, y1 - y0, b1 - b0, col);
     // u runs along the road and v across it, both 0-4 within the block.
     const rect = (u0, u1, v0, v1, y0, y1, col) => (ax === 'x' ? box(u0, u1, y0, y1, v0, v1, col) : box(v0, v1, y0, y1, u0, u1, col));
@@ -368,25 +452,8 @@ export class TerrainRenderer {
     const edgePt = (d, inset, along) => { const p = d % 2 === 0 ? 4 - inset : inset; return d < 2 ? [p, along] : [along, p]; };
     const place = (p, lx, lz, ry = 0, y = 0, colors = {}, s = 1) => bat.place(p, mtx(x0 + lx, Y + y, z0 + lz, 0, ry, 0, s, s, s), colors, 'terrain', 'wd', true);
     const U = (p, u, v, ry = 0, y = 0, colors = {}, s = 1) => (ax === 'x' ? place(p, u, v, ry, y, colors, s) : place(p, v, u, ry + Math.PI / 2, y, colors, s));
-    const toCenter = [Math.PI, 0, Math.PI / 2, -Math.PI / 2];
     const car = (u, v, ry, s = 1) => { const cp = carParts(); U(cp.paint, u, v, ry, 0.03, { paint: CAR_COLORS[Math.floor(R() * CAR_COLORS.length)] }, s); U(cp.rest, u, v, ry, 0.03, {}, s); };
     switch (rd.t) {
-      case 'road': {
-        box(0, 4, 0, 0.03, 0, 4, [0x3b3d42, PAT.GRAVEL]);
-        N4.forEach((_, d) => {
-          if (wheels(nb[d])) return;
-          strip(d, 0, 0.8, 0, 0.16, [0xb8b3a8, PAT.TILE]);
-          strip(d, 0.8, 0.92, 0, 0.17, [0x9a968e, PAT.ASHLAR]);
-          const k = R();
-          if (k < 0.3) { const [lx, lz] = edgePt(d, 0.4, 0.6 + R() * 2.8); place(lampPostPart(), lx, lz, toCenter[d], 0.16); }
-          else if (k < 0.5) { const [lx, lz] = edgePt(d, 0.4, 0.6 + R() * 2.8); place(anyTreePart(R(), 0.9, [0, 0, 2, 5][Math.floor(R() * 4)]), lx, lz, R() * 6, 0.16); }
-        });
-        // A two-block-wide road shares its center line along the joining edge.
-        if (straight) across.forEach((d, i) => { if (nb[d] === 'road') for (const u of [0.3, 2.3]) rect(u, u + 1.4, i === 0 ? 3.95 : 0, i === 0 ? 4 : 0.05, 0.03, 0.036, 0xe0b440); });
-        const curb = across.findIndex((d) => !wheels(nb[d]));
-        if (straight && curb >= 0 && R() < 0.35) car(2, curb === 0 ? 4 - 0.92 - 0.95 : 0.92 + 0.95, R() < 0.5 ? 0 : Math.PI);
-        break;
-      }
       case 'bikelane': {
         box(0, 4, 0, 0.03, 0, 4, [0x3b3d42, PAT.GRAVEL]);
         rect(0, 4, 0.45, 3.55, 0.03, 0.034, [0x2e8b57, PAT.CONCRETE]);
@@ -401,30 +468,12 @@ export class TerrainRenderer {
         });
         break;
       }
-      case 'boulevard': {
-        box(0, 4, 0, 0.12, 0, 4, [0xcfc6b4, PAT.TILE]);
-        N4.forEach((_, d) => {
-          if (nb[d] === 'boulevard') return;
-          strip(d, 0, 0.3, 0.12, 0.13, [0x8f877a, PAT.ASHLAR]);
-          if (wheels(nb[d])) for (const a of [0.6, 2, 3.4]) { const [lx, lz] = edgePt(d, 0.15, a); place(bollardPart(), lx, lz, 0, 0.12); }
-        });
-        if (hash(x, z, 17) < 0.5 || !straight) {
-          U(planterPart(Math.floor(R() * 4)), 2, 2, 0, 0.12);
-          U(anyTreePart(R(), 1.15, [0, 0, 2, 4, 5][Math.floor(R() * 5)]), 2, 2, R() * 6, 0.57);
-        } else {
-          U(benchPart(), 2, 2.75, 0, 0.12);
-          U(benchPart(), 2, 1.25, Math.PI, 0.12);
-          U(lampPostPart(), 0.4, 2, 0, 0.12);
-          if (R() < 0.25) U(newsstandPart(), 3.4, 2, Math.PI / 2, 0.12);
-        }
-        break;
-      }
       case 'lane': {
         box(0, 4, 0, 0.06, 0, 4, [0x8a8378, PAT.ASHLAR]);
         if (straight) rect(0, 4, 1.85, 2.15, 0.06, 0.066, [0x6a655d, PAT.CONCRETE]);
         N4.forEach((_, d) => {
           const k = nb[d];
-          if (k === 'lane' || k === 'boulevard') return;
+          if (k === 'lane') return;
           if (wheels(k)) { for (const a of [0.7, 2, 3.3]) { const [lx, lz] = edgePt(d, 0.3, a); place(bollardPart(), lx, lz, 0, 0.06); } return; }
           if (R() < 0.5) { const [lx, lz] = edgePt(d, 0.4, 0.5 + R() * 3); place(pottedPlantPart(R(), 1.3), lx, lz, 0, 0.06); }
         });

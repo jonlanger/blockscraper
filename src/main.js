@@ -251,7 +251,7 @@ function setActive(id, fly = false) {
 function fillArea(x, z, mode) {
   const L = city.layout;
   if (!mode || !L.inGrid(x, z)) return [[x, z]];
-  if (L.isGridStreet(x, z)) {
+  if (L.isGridBand(x, z)) {
     // On a street: Plot fills across the street here, Block the whole stretch between intersections.
     const inX = L.isStreetX(x), inZ = L.isStreetZ(z), sx = Math.floor(x / L.P) * L.P, sz = Math.floor(z / L.Q) * L.Q;
     const xs = inX ? [sx, sx + STREET - 1] : mode === 'block' ? [sx + STREET, sx + L.P - 1] : [x, x];
@@ -272,12 +272,16 @@ function fillArea(x, z, mode) {
   return out;
 }
 
-function placeAt(x, y, z, mode) {
+const levelsOf = (cells) => { const ys = new Set(cells.map((c) => c[1])); return ys.size === 1 ? levelName(cells[0][1]) : `${ys.size} levels`; };
+
+// cells: [[x, y, z], ...]. multi: a fill or drag, which quietly skips spaces already taken. Lower blocks
+// go first so a dragged column stands on itself.
+function placeAt(cells, multi) {
   const mod = MODULES[game.moduleId];
   let placed = 0, err = null, last = null;
-  for (const [tx, tz] of fillArea(x, z, mode)) {
+  for (const [tx, y, tz] of [...cells].sort((a, b) => a[1] - b[1])) {
     const e = city.canPlace(tx, y, tz, game.moduleId);
-    if (e) { if (!mode || e !== 'Space occupied') err = e; continue; }
+    if (e) { if (!multi || e !== 'Space occupied') err = e; continue; }
     if (!game.sandbox && game.money < mod.cost) { err = `Not enough funds — ${mod.name} costs ${fmt(mod.cost)}`; break; }
     city.set(tx, y, tz, game.moduleId, game.styleId, game.variant);
     if (city.terrain.has(tk(tx, tz))) city.setTerrain(tx, tz, null); // level land cover makes way
@@ -285,17 +289,18 @@ function placeAt(x, y, z, mode) {
     if (!game.sandbox) game.money -= mod.cost;
     placed++;
     last = [tx, y, tz];
-    if (mode && placed % 25 === 0) city.recompute();
+    if (multi && placed % 25 === 0) city.recompute();
   }
   if (placed) {
     afterEdit(last);
-    if (mode) ui.toast(`Built ${placed} × ${mod.name} on ${levelName(y)}${game.sandbox ? '' : ' for ' + fmt(placed * mod.cost)}`);
+    if (multi) ui.toast(`Built ${placed} × ${mod.name} on ${levelsOf(cells)}${game.sandbox ? '' : ' for ' + fmt(placed * mod.cost)}`);
   } else if (err) ui.toast(err, 'bad');
 }
 
-function eraseAt(x, y, z, mode) {
+// Top blocks go first, so a dragged column comes down cleanly.
+function eraseAt(cells) {
   let removed = 0, refund = 0, err = null;
-  for (const [tx, tz] of fillArea(x, z, mode)) {
+  for (const [tx, y, tz] of [...cells].sort((a, b) => b[1] - a[1])) {
     const c = city.get(tx, y, tz);
     if (!c) continue;
     const e = city.canRemove(tx, y, tz);
@@ -311,9 +316,9 @@ function eraseAt(x, y, z, mode) {
   } else if (err) ui.toast(err, 'bad');
 }
 
-function paintAt(x, y, z, mode) {
+function paintAt(cells) {
   let n = 0;
-  for (const [tx, tz] of fillArea(x, z, mode)) {
+  for (const [tx, y, tz] of cells) {
     const c = city.get(tx, y, tz);
     if (!c || (c.s === game.styleId && (c.v || 0) === game.variant)) continue;
     if (!game.sandbox && game.money < 1500) { ui.toast('Not enough funds to restyle', 'bad'); break; }
@@ -385,7 +390,7 @@ function decorHover(hit) {
   for (const c of cells) for (const dd of dirs) { const e = decorBlocked(c, dd, def); if (e) err = err || e; else faces.push([c, dd]); }
   // With nothing to do, explain the wall under the pointer first.
   const why = faces.length ? null : (d >= 0 && decorBlocked(cell, d, def)) || err || 'Nothing to decorate here';
-  return { decor: true, t: [hit.ix, hit.iy, hit.iz], cell, d, faces, err: why };
+  return { decor: true, t: [hit.ix, hit.iy, hit.iz], cell, d, faces, err: why, hit };
 }
 
 function applyDecor(h) {
@@ -412,14 +417,16 @@ function applyTerrain(h) {
   const { out, cost } = h.plan;
   if (!out.length) return ui.toast(h.err, 'bad');
   if (!game.sandbox && game.money < cost) return ui.toast(`Not enough funds — that costs ${fmt(cost)}`, 'bad');
-  for (const { kind, x, z, rec } of out) {
-    if (kind === 'land') city.setLand(x, z, rec);
-    else if (kind === 'road') city.setRoad(x, z, rec);
+  for (const { kind, x, z, k, rec, s } of out) {
+    if (kind === 'street') city.setStreet(k, rec);
+    else if (kind === 'land') city.setLand(x, z, rec);
+    else if (kind === 'road') city.setRoad(x, z, rec, s);
     else city.setTerrain(x, z, rec);
   }
   if (!game.sandbox) game.money -= cost;
   city.recompute();
   world.setTerrain(city);
+  if (out.some((o) => o.kind === 'street')) updateStops(); // platforms and bus bays may have lost (or found) their street
   ui.refresh();
 }
 
@@ -505,12 +512,12 @@ function newCity({ template, map, lots, plot }) {
 }
 
 const A = {
-  setTool: (t) => { game.tool = t; if (t !== 'inspect') ui.inspect(null); ui.refreshPalette(); },
+  setTool: (t) => { game.tool = t; if (t !== 'inspect') ui.inspect(null); syncControls(); ui.refreshPalette(); },
   pickColorway: (s, v) => { game.styleId = s; game.variant = v; ui.refreshPalette(); },
   setModule: (m) => { game.moduleId = m; game.brush = 'module'; game.tool = 'build'; ui.refreshPalette(); },
   setTerrain: (t) => { game.terrainId = t; game.brush = 'terrain'; game.tool = 'build'; ui.refreshPalette(); },
   setDecor: (id) => { game.decorId = id; game.brush = 'decor'; game.tool = 'build'; ui.refreshPalette(); },
-  setFill: (f) => { game.fill = f || null; modeHeld = game.fill; ui.refreshPalette(); },
+  setFill: (f) => { game.fill = f || null; modeHeld = CLICK_FILLS.has(game.fill) ? game.fill : null; syncControls(); ui.refreshPalette(); },
   setBrushSize: (n) => { game.brushSize = n; if (game.brush !== 'terrain') game.brush = 'terrain'; game.tool = 'build'; ui.refreshPalette(); },
   setSpeed: (s) => { game.speed = s; ui.refreshPalette(); },
   toggleCutaway: () => { game.cutaway = !game.cutaway; people.populate(city, activeB(), game.time); ui.refreshPalette(); },
@@ -560,6 +567,7 @@ function computeHover() {
   if (!pointer || !city) return;
   ndc.set((pointer.x / innerWidth) * 2 - 1, -(pointer.y / innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
+  if (drag) { hover = dragHover(); return; }
   if (game.tool === 'build' && game.brush === 'terrain') { hover = terrainHover(); return; }
   const filter = game.isolate ? (c) => c.b === game.activeId : game.cutLevel !== null ? (c) => c.b !== game.activeId || c.y <= game.cutLevel : null;
   const hit = pickCity(raycaster.ray, city, {
@@ -572,9 +580,9 @@ function computeHover() {
   if (game.tool === 'build') {
     if (hit.kind === 'cell' && !hit.n.some((v) => v)) return;
     const t = [hit.ix + hit.n[0], hit.iy + hit.n[1], hit.iz + hit.n[2]];
-    hover = { t, err: city.canPlace(t[0], t[1], t[2], game.moduleId), cell };
+    hover = { t, err: city.canPlace(t[0], t[1], t[2], game.moduleId), cell, hit };
   } else if (cell) {
-    hover = { t: [hit.ix, hit.iy, hit.iz], cell, err: game.tool === 'erase' ? city.canRemove(hit.ix, hit.iy, hit.iz) : null };
+    hover = { t: [hit.ix, hit.iy, hit.iz], cell, hit, err: game.tool === 'erase' ? city.canRemove(hit.ix, hit.iy, hit.iz) : null };
   }
 }
 
@@ -592,7 +600,7 @@ function terrainHover() {
   const r = (game.brushSize - 1) / 2, cells = [];
   if (modeHeld && L.inMap(gx, gz)) cells.push(...fillArea(gx, gz, modeHeld));
   else for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) if (anywhere || L.inMap(gx + dx, gz + dz)) cells.push([gx + dx, gz + dz]);
-  const plan = planTerrain(city, game.terrainId, cells, gx, gz, r);
+  const plan = planTerrain(city, game.terrainId, cells, { x0: gx, x1: gx, z0: gz, z1: gz }, r);
   return { terrain: true, t: [gx, 0, gz], y: p.y, cells, plan, err: plan.out.length ? null : plan.err || 'Nothing to change here' };
 }
 
@@ -609,7 +617,7 @@ function updateOverlays(mode) {
   if (hover.terrain) {
     const def = TERRAIN[game.terrainId], n = hover.plan.count ?? hover.plan.out.length;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (const [a, b] of hover.cells) { x0 = Math.min(x0, a); x1 = Math.max(x1, a); z0 = Math.min(z0, b); z1 = Math.max(z1, b); }
+    for (const [a, b] of hover.plan.area?.length ? hover.plan.area : hover.cells) { x0 = Math.min(x0, a); x1 = Math.max(x1, a); z0 = Math.min(z0, b); z1 = Math.max(z1, b); }
     const color = hover.err ? 0xff4d4d : TOOL_COLORS.build;
     ghost.visible = true;
     ghost.material.color.setHex(color);
@@ -617,7 +625,7 @@ function updateOverlays(mode) {
     ghost.position.set(L.wx((x0 + x1 + 1) / 2), Math.max(hover.y, GROUND_Y) + 0.3, L.wz((z0 + z1 + 1) / 2));
     ghost.scale.set((x1 - x0 + 1) * CELL + 0.1, 0.6, (z1 - z0 + 1) * CELL + 0.1);
     const price = game.sandbox ? 'Free in sandbox' : hover.plan.cost ? fmt(hover.plan.cost) : 'Free';
-    ui.tooltip(pointer.x, pointer.y, `<b>${icon(def.icon)} ${def.name}</b> · ${n} block${n === 1 ? '' : 's'}<small>${hover.err ? icon('ban') + ' ' + hover.err : price}</small>`);
+    ui.tooltip(pointer.x, pointer.y, `<b>${icon(def.icon)} ${def.name}</b> · ${hover.plan.label || `${n} block${n === 1 ? '' : 's'}`}<small>${hover.err ? icon('ban') + ' ' + hover.err : price}</small>`);
     return;
   }
   if (hover.decor) {
@@ -625,7 +633,7 @@ function updateOverlays(mode) {
     ghost.visible = true;
     ghost.material.color.setHex(color);
     ghostEdges.material.color.setHex(color);
-    const one = n === 1 ? hover.faces[0] : !n && hover.d >= 0 && !modeHeld ? [hover.cell, hover.d] : null;
+    const one = n === 1 ? hover.faces[0] : !n && hover.d >= 0 && !modeHeld && !hover.drag ? [hover.cell, hover.d] : null;
     if (one) {
       const [c, d] = one, [dx, dz] = DIR4[d];
       ghost.position.set(L.wx(c.x) + 2 + dx * 2.1, c.y * CELL + 2, L.wz(c.z) + 2 + dz * 2.1);
@@ -642,7 +650,7 @@ function updateOverlays(mode) {
     return;
   }
   const [x, y, z] = hover.t;
-  const lot = L.lotAt(x, z);
+  const lot = !hover.drag && L.lotAt(x, z);
   if (lot && !game.hood) {
     plotRect.visible = true;
     plotRect.position.set(L.wx(lot.gx), y * CELL + 0.09, L.wz(lot.gz));
@@ -654,21 +662,21 @@ function updateOverlays(mode) {
   ghost.visible = true;
   ghost.material.color.setHex(color);
   ghostEdges.material.color.setHex(color);
-  if (mode && game.tool !== 'inspect') {
-    const cells = fillArea(x, z, mode);
-    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (const [a, b] of cells) { x0 = Math.min(x0, a); x1 = Math.max(x1, a); z0 = Math.min(z0, b); z1 = Math.max(z1, b); }
-    ghost.position.set(L.wx((x0 + x1 + 1) / 2), y * CELL + 2, L.wz((z0 + z1 + 1) / 2));
-    ghost.scale.set((x1 - x0 + 1) * CELL + 0.1, CELL + 0.1, (z1 - z0 + 1) * CELL + 0.1);
+  const cells = hover.cells || (mode && game.tool !== 'inspect' ? fillArea(x, z, mode).map(([a, b]) => [a, y, b]) : null);
+  if (cells) {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const [a, b, c] of cells) { x0 = Math.min(x0, a); x1 = Math.max(x1, a); y0 = Math.min(y0, b); y1 = Math.max(y1, b); z0 = Math.min(z0, c); z1 = Math.max(z1, c); }
+    ghost.position.set(L.wx((x0 + x1 + 1) / 2), ((y0 + y1 + 1) / 2) * CELL, L.wz((z0 + z1 + 1) / 2));
+    ghost.scale.set((x1 - x0 + 1) * CELL + 0.1, (y1 - y0 + 1) * CELL + 0.1, (z1 - z0 + 1) * CELL + 0.1);
   } else {
     ghost.position.set(L.wx(x) + 2, y * CELL + 2, L.wz(z) + 2);
     ghost.scale.setScalar(CELL + 0.12);
   }
-  const m = MODULES[game.moduleId];
-  const area = mode === 'block' ? ' (whole city block)' : mode ? ' (whole plot)' : '';
+  const m = MODULES[game.moduleId], multi = !!(mode || hover.drag);
+  const area = hover.drag ? ` · ${cells.length} in a ${drag.area ? 'rectangle' : 'line'}` : mode === 'block' ? ' (whole city block)' : mode ? ' (whole plot)' : '';
   let html;
   if (game.tool === 'build') {
-    html = `<b>${icon(m.icon)} ${m.name}</b> → ${levelName(y)}${area}<small>${hover.err && !mode ? icon('ban') + ' ' + hover.err : game.sandbox ? 'Free in sandbox' : fmt(m.cost) + (mode ? ' each' : '')}</small>`;
+    html = `<b>${icon(m.icon)} ${m.name}</b> → ${hover.drag ? levelsOf(cells) : levelName(y)}${area}<small>${hover.err && !multi ? icon('ban') + ' ' + hover.err : game.sandbox ? 'Free in sandbox' : fmt(m.cost) + (multi ? ' each' : '')}</small>`;
   } else if (hover.cell) {
     const cm = MODULES[hover.cell.m], bn = city.names.get(hover.cell.b) || '';
     const verb = { erase: 'Remove', paint: `Paint ${STYLES[game.styleId].name} · ${STYLES[game.styleId].variants[game.variant].name}`, inspect: 'Click to select building' }[game.tool];
@@ -677,39 +685,155 @@ function updateOverlays(mode) {
   ui.tooltip(pointer.x, pointer.y, html);
 }
 
+// ---------- drag to draw ----------
+// Hold the pointer still for a moment, then drag: the action repeats along a straight line, or over a
+// rectangle while Shift is held. With the Line or Area fill a plain drag draws (the middle button orbits).
+// Blocks draw in the plane of the face the drag started on, so dragging up a wall makes a column.
+const HOLD_MS = 320, DRAG_MAX = 1600;
+const CLICK_FILLS = new Set(['plot', 'block']), DRAW_FILLS = new Set(['line', 'area']);
+let drag = null, holdTimer = 0;
+const _dp = new THREE.Vector3();
+
+function syncControls() {
+  const draw = DRAW_FILLS.has(game.fill) && game.tool !== 'inspect';
+  controls.mouseButtons.LEFT = draw ? -1 : THREE.MOUSE.ROTATE;
+  controls.mouseButtons.MIDDLE = draw ? THREE.MOUSE.ROTATE : THREE.MOUSE.DOLLY;
+  controls.touches.ONE = draw ? -1 : THREE.TOUCH.ROTATE;
+}
+
+function beginDrag(e) {
+  computeHover();
+  const h = hover;
+  if (!h || game.tool === 'inspect' || (!h.terrain && !h.hit)) return;
+  let t0 = h.t, axis = 1, plane = h.y;
+  if (!h.terrain) {
+    const n = h.hit.n;
+    axis = n[0] ? 0 : n[2] ? 2 : 1;
+    plane = raycaster.ray.at(h.hit.t, _dp).getComponent(axis);
+    if (h.decor || game.tool !== 'build') t0 = [h.hit.ix, h.hit.iy, h.hit.iz];
+  }
+  drag = { t0, axis, plane, terrain: !!h.terrain, decor: !!h.decor, d: h.decor ? h.d : -1, area: e.shiftKey || game.fill === 'area', key: '', hover: null };
+  controls.enabled = false;
+  canvas.style.cursor = 'crosshair';
+  navigator.vibrate?.(10);
+}
+
+function endDrag() {
+  drag = null;
+  clearTimeout(holdTimer);
+  controls.enabled = true;
+  canvas.style.cursor = '';
+}
+
+// The cells from the drag's start to the pointer, in the drag plane: a line along the longer direction,
+// or the whole rectangle.
+function dragCells() {
+  const L = city.layout, ray = raycaster.ray, a = drag.axis, t0 = drag.t0, dir = ray.direction.getComponent(a);
+  const s = Math.abs(dir) > 1e-6 ? (drag.plane - ray.origin.getComponent(a)) / dir : -1;
+  const cur = [...t0];
+  if (s > 0) {
+    const p = ray.at(s, _dp);
+    cur[0] = L.gx(p.x); cur[1] = Math.floor(p.y / CELL); cur[2] = L.gz(p.z);
+    cur[a] = t0[a];
+  }
+  if (drag.terrain) cur[1] = t0[1];
+  const [u, w] = [0, 1, 2].filter((i) => i !== a), alongU = Math.abs(cur[u] - t0[u]) >= Math.abs(cur[w] - t0[w]);
+  const span = (i, on) => (on ? [Math.min(t0[i], cur[i]), Math.max(t0[i], cur[i])] : [t0[i], t0[i]]);
+  const [u0, u1] = span(u, drag.area || alongU), [w0, w1] = span(w, drag.area || !alongU);
+  const cells = [];
+  for (let i = u0; i <= u1 && cells.length < DRAG_MAX; i++) for (let j = w0; j <= w1 && cells.length < DRAG_MAX; j++) { const c = [...t0]; c[u] = i; c[w] = j; cells.push(c); }
+  return { cells, key: `${u0},${u1},${w0},${w1}` };
+}
+
+// The hover for a drag in progress, shaped like the tool's click hover plus `cells`.
+function dragHover() {
+  const { cells, key } = dragCells();
+  const k = `${key}|${drag.area}|${game.tool}|${game.brush}|${game.moduleId}|${game.terrainId}|${game.decorId}|${game.brushSize}`;
+  if (drag.hover && drag.key === k) return drag.hover;
+  drag.key = k;
+  const L = city.layout, [x, y, z] = drag.t0;
+  let h;
+  if (drag.terrain) {
+    // The brush sweeps the line or rectangle.
+    const r = (game.brushSize - 1) / 2, anywhere = TERRAIN[game.terrainId].group === 'land', flat = [];
+    const rect = { x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity };
+    for (const [cx, , cz] of cells) { rect.x0 = Math.min(rect.x0, cx); rect.x1 = Math.max(rect.x1, cx); rect.z0 = Math.min(rect.z0, cz); rect.z1 = Math.max(rect.z1, cz); }
+    for (let gx = rect.x0 - r; gx <= rect.x1 + r; gx++) for (let gz = rect.z0 - r; gz <= rect.z1 + r; gz++) if (anywhere || L.inMap(gx, gz)) flat.push([gx, gz]);
+    // A dragged road runs up to the city streets and joins them rather than replacing them.
+    const plan = planTerrain(city, game.terrainId, flat, rect, r, { keepStreets: true });
+    h = { terrain: true, drag: true, t: drag.t0, y: drag.plane, cells: flat, plan, err: plan.out.length ? null : plan.err || 'Nothing to change here' };
+  } else if (drag.decor) {
+    // A wall drag decorates that face of every block along it; a roof drag, every wall.
+    const def = DECOR[game.decorId], dirs = drag.d >= 0 ? [drag.d] : [0, 1, 2, 3], faces = [];
+    let err = null;
+    for (const [cx, cy, cz] of cells) {
+      const c = city.get(cx, cy, cz);
+      if (c) for (const d of dirs) { const e = decorBlocked(c, d, def); if (e) err = err || e; else faces.push([c, d]); }
+    }
+    h = { decor: true, drag: true, t: drag.t0, cell: faces[0]?.[0] || city.get(x, y, z), d: drag.d, faces, err: faces.length ? null : err || 'Nothing to decorate here' };
+  } else {
+    h = { drag: true, t: drag.t0, cells, cell: city.get(x, y, z), err: null };
+  }
+  return (drag.hover = h);
+}
+
+// Carry out a click (mode: a Plot / Block fill or null) or a finished drag.
+function act(e, h, mode) {
+  if (h.terrain) return record(TERRAIN[game.terrainId].name, () => applyTerrain(h));
+  if (h.decor) return e.altKey && !h.drag ? pickDecor(h) : record(DECOR[game.decorId].name, () => applyDecor(h));
+  const [x, y, z] = h.t;
+  if (e.altKey && h.cell && !h.drag) {
+    game.moduleId = h.cell.m; game.styleId = h.cell.s; game.variant = h.cell.v || 0; game.tool = 'build'; game.brush = 'module';
+    ui.expandFor(h.cell.m); ui.openStyle(h.cell.s); ui.refreshPalette();
+    return ui.toast(`Picked ${MODULES[h.cell.m].name} · ${STYLES[h.cell.s].name}`);
+  }
+  const cells = h.cells || fillArea(x, z, mode).map(([a, b]) => [a, y, b]), multi = !!(mode || h.drag);
+  if (game.tool === 'build') record(MODULES[game.moduleId].name, () => placeAt(cells, multi));
+  else if (game.tool === 'erase') record('Erase', () => eraseAt(cells));
+  else if (game.tool === 'paint') record('Paint', () => paintAt(cells));
+  else if (h.cell) { setActive(h.cell.b); ui.inspect(h.cell); }
+}
+
 let down = null, modeHeld = null;
-const modeOf = (e) => (e.shiftKey ? (e.ctrlKey || e.metaKey ? 'block' : 'plot') : game.fill);
-// A tap is one pointer that barely moved; a second finger (pinch / pan) cancels it.
+const modeOf = (e) => (e.shiftKey ? (e.ctrlKey || e.metaKey ? 'block' : 'plot') : CLICK_FILLS.has(game.fill) ? game.fill : null);
+// A tap is one pointer that barely moved; holding it still starts a drag; a second finger (pinch / pan) cancels both.
 const activePointers = new Set();
 canvas.addEventListener('pointerdown', (e) => {
   activePointers.add(e.pointerId);
-  down = activePointers.size > 1 ? null : { x: e.clientX, y: e.clientY, btn: e.button, slop: e.pointerType === 'mouse' ? 5 : 12 };
-});
-for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, (e) => { activePointers.delete(e.pointerId); if (type === 'pointercancel') down = null; });
-canvas.addEventListener('pointermove', (e) => { pointer = { x: e.clientX, y: e.clientY }; modeHeld = modeOf(e); });
-canvas.addEventListener('pointerleave', () => { pointer = null; });
-canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-canvas.addEventListener('pointerup', (e) => {
-  if (!down) return;
-  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), { btn, slop } = down;
-  down = null;
-  if (moved > slop || btn !== 0) return;
+  clearTimeout(holdTimer);
+  if (activePointers.size > 1) { down = null; if (drag) endDrag(); return; }
+  down = { x: e.clientX, y: e.clientY, btn: e.button, slop: e.pointerType === 'mouse' ? 5 : 12 };
+  if (e.button !== 0 || game.tool === 'inspect') return;
   pointer = { x: e.clientX, y: e.clientY };
   modeHeld = modeOf(e);
-  computeHover();
-  if (!hover) return;
-  if (hover.terrain) return record(TERRAIN[game.terrainId].name, () => applyTerrain(hover));
-  if (hover.decor) return e.altKey ? pickDecor(hover) : record(DECOR[game.decorId].name, () => applyDecor(hover));
-  const [x, y, z] = hover.t, mode = modeOf(e);
-  if (e.altKey && hover.cell) {
-    game.moduleId = hover.cell.m; game.styleId = hover.cell.s; game.variant = hover.cell.v || 0; game.tool = 'build'; game.brush = 'module';
-    ui.expandFor(hover.cell.m); ui.openStyle(hover.cell.s); ui.refreshPalette();
-    return ui.toast(`Picked ${MODULES[hover.cell.m].name} · ${STYLES[hover.cell.s].name}`);
+  if (DRAW_FILLS.has(game.fill)) beginDrag(e);
+  else holdTimer = setTimeout(() => { if (down && !drag && activePointers.size === 1) beginDrag(e); }, HOLD_MS);
+});
+for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, (e) => { activePointers.delete(e.pointerId); if (type === 'pointercancel') { down = null; if (drag) endDrag(); } });
+canvas.addEventListener('pointermove', (e) => {
+  pointer = { x: e.clientX, y: e.clientY };
+  modeHeld = modeOf(e);
+  if (drag) drag.area = e.shiftKey || game.fill === 'area';
+  else if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > down.slop) clearTimeout(holdTimer);
+});
+canvas.addEventListener('pointerleave', () => { if (!drag) pointer = null; });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('pointerup', (e) => {
+  clearTimeout(holdTimer);
+  const started = down;
+  down = null;
+  pointer = { x: e.clientX, y: e.clientY };
+  if (drag) {
+    computeHover();
+    const h = hover;
+    endDrag();
+    if (h && started) act(e, h, null);
+    return;
   }
-  if (game.tool === 'build') record(MODULES[game.moduleId].name, () => placeAt(x, y, z, mode));
-  else if (game.tool === 'erase') record('Erase', () => eraseAt(x, y, z, mode));
-  else if (game.tool === 'paint') record('Paint', () => paintAt(x, y, z, mode));
-  else { setActive(hover.cell.b); ui.inspect(hover.cell); }
+  if (!started || e.button !== 0 || Math.hypot(e.clientX - started.x, e.clientY - started.y) > started.slop || started.btn !== 0) return;
+  modeHeld = modeOf(e);
+  computeHover();
+  if (hover) act(e, hover, modeOf(e));
 });
 // Touch has no hover: drop the preview once the tap is handled.
 canvas.addEventListener('pointerup', (e) => { if (e.pointerType !== 'mouse') pointer = null; });
@@ -724,6 +848,7 @@ canvas.addEventListener('dblclick', () => {
 addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   modeHeld = modeOf(e);
+  if (drag) drag.area = e.shiftKey || game.fill === 'area';
   const key = e.key.toLowerCase();
   if ((e.metaKey || e.ctrlKey) && (key === 'z' || key === 'y')) {
     e.preventDefault();
@@ -750,10 +875,20 @@ addEventListener('keydown', (e) => {
     case 'tab': e.preventDefault(); cycle(e.shiftKey ? -1 : 1); break;
     case ' ': e.preventDefault(); A.setSpeed(game.speed ? 0 : 1); break;
     case 'h': ui.toggleHelp(); break;
-    case 'escape': A.setTool('inspect'); ui.closeAll(); break;
+    case '1': case '2': case '3': case '4': case '5': A.setFill([null, 'plot', 'block', 'line', 'area'][+key - 1]); break;
+    case '-': case '_': case '=': case '+': {
+      const sizes = [1, 3, 5, 7], i = Math.max(0, Math.min(3, sizes.indexOf(game.brushSize) + (key === '-' || key === '_' ? -1 : 1)));
+      game.brushSize = sizes[i];
+      ui.refreshPalette();
+      ui.toast(`Map brush ${sizes[i]}×${sizes[i]}`);
+      break;
+    }
+    case 'escape':
+      if (drag) { endDrag(); down = null; break; } // cancel the drag, keep the tool
+      A.setTool('inspect'); ui.closeAll(); break;
   }
 });
-addEventListener('keyup', (e) => { modeHeld = modeOf(e); });
+addEventListener('keyup', (e) => { modeHeld = modeOf(e); if (drag) drag.area = e.shiftKey || game.fill === 'area'; });
 
 // ---------- boot ----------
 if (!load()) { initCity(DEFAULT_LAYOUT); applyClassic(city); }

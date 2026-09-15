@@ -65,7 +65,7 @@
     <div class="brush-wrap"><span class="lbl">Current brush</span><div id="brush" class="brush"></div></div>
     <div class="brush-size" role="group" aria-label="Fill area">
       <span class="lbl">Fill</span>
-      <button data-fill="" title="One block or wall per click">Single</button><button data-fill="plot" title="Whole plot or floor per click (Shift+click)">Plot</button><button data-fill="block" title="Whole city block or building per click (Ctrl/⌘+Shift+click)">Block</button>
+      <button data-fill="" title="One block or wall per click (1)">Single</button><button data-fill="plot" title="Whole plot or floor per click (Shift+click · 2)">Plot</button><button data-fill="block" title="Whole city block or building per click (Ctrl/⌘+Shift+click · 3)">Block</button><button data-fill="line" title="Drag a straight line — or hold and drag in any fill (4). Middle-drag orbits.">Line</button><button data-fill="area" title="Drag a rectangle — or hold, drag and add Shift in any fill (5). Middle-drag orbits.">Area</button>
     </div>
     <h3>1 · Architectural style &amp; colorway</h3>
     <div id="styles" class="accs"></div>
@@ -141,6 +141,8 @@
     <ul>
       <li>Open a <b>style</b>, choose a <b>colorway</b>, then pick a <b>block</b>.</li>
       <li><b>Click</b> a plot or block face to place. <b>Shift+click</b> fills the plot · <b>Ctrl/⌘+Shift+click</b> fills the whole city block.</li>
+      <li><b>Hold, then drag</b> to repeat any tool along a straight line — blocks, erase, paint, ornaments, map blocks and streets. Add <b>Shift</b> while dragging for a rectangle. Drag up a wall for a column. <b>Esc</b> cancels.</li>
+      <li><b>1–5</b> pick the fill: Single, Plot, Block, Line, Area. With Line or Area a plain drag draws and the <b>middle button</b> orbits. <b>− / =</b> resize the map brush.</li>
       <li>Buildings join automatically when blocks touch — build across plots and streets, as wide and as deep as you like.</li>
       <li><b>Streets</b> don't stop a building: build on one to close that stretch (traffic turns back), or keep it open and span upper floors over it from a building beside it.</li>
       <li><b>Double-click</b> (or Select tool) chooses a building · <b>Tab</b> cycles · <b>Z</b> frames it · <b>O</b> focuses on it alone.</li>
@@ -155,7 +157,8 @@
       <li>Each <b>Foundation Pile</b> lets a building rise 3 more floors.</li>
       <li>Subway platforms (B2) and bus bays touch an east–west street; rail platforms (B4) touch the red rail street.</li>
       <li><b>Map blocks</b> shape empty plots: paint land cover or water, and raise, lower or level the ground with the brush. Buildings need dry, level land.</li>
-      <li><b>Land</b> map blocks grow the ground out past the map edge; <b>Streets &amp; paths</b> add roads, bike paths, boulevards and parking — buildings open onto them.</li>
+      <li><b>City streets &amp; intersections</b> rework any street — the city grid or roads you paint, which get the same lane lines, curbs and intersections sized to their width (medians, bike lanes and roundabouts need a road 3 blocks wide): click a street to make it one-way (again to reverse), add a planted median or protected bike lanes, pedestrianize it or remove it for building land. Click an intersection for signals, stop signs, a roundabout, a scramble crossing or a plaza. Traffic follows the new layout.</li>
+      <li><b>Land</b> map blocks grow the ground out past the map edge; <b>Streets &amp; paths</b> add roads, bike paths, boulevards and parking — buildings open onto them. They paint straight over each other, land cover, water and slopes; clicked onto a city street they take over that whole stretch, while a dragged line stops at the street and joins it. Land cover and water paint over roads too. Join a road or bike path to a city street (three or more blocks long) and cars and cyclists turn in and out; boulevards and lanes fill with people.</li>
       <li><b>Facade ornaments</b> go on a wall: click a face for one wall, the roof of a block for all its walls, <b>Shift+click</b> for the whole floor, <b>Ctrl/⌘+Shift+click</b> for the whole building. Stacked columns, buttresses and oriels join into one. <b>Alt+click</b> picks up an ornament.</li>
       <li><b>Skybridges</b> hang from a building beside them — no block needed below. <b>Structures &amp; Sculpture</b> also has loggias, statues and monuments.</li>
       <li><b>Entries &amp; Terraces</b> dress a street frontage: café terraces, stoops, grand stairs, porticos and arcades take the chosen style.</li>

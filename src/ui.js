@@ -101,7 +101,7 @@ export function initUI(game, A) {
         for (const t of items) {
           const b = document.createElement('button');
           b.className = 'module' + (game.brush === 'terrain' && game.terrainId === t.id ? ' on' : '');
-          const per = !t.cost ? '' : ['raise', 'lower', 'hill', 'mesa'].includes(t.id) ? 'per m' : 'per block';
+          const per = !t.cost ? '' : ['raise', 'lower', 'hill', 'mesa'].includes(t.id) ? 'per m' : t.group !== 'grid' ? 'per block' : t.piece === 'x' ? 'per crossing' : 'per street';
           b.innerHTML = `<span class="mi">${icon(t.icon)}</span><span class="mt"><b>${t.name}</b><small>${t.desc}</small></span>
             <span class="mc">${t.cost ? fmt(t.cost) : 'Free'}<small>${per}</small></span>`;
           b.onclick = () => { A.setTerrain(t.id); if (narrow(900)) setDrawer(false); };
@@ -152,7 +152,8 @@ export function initUI(game, A) {
     }
     if (game.brush === 'terrain') {
       const t = TERRAIN[game.terrainId];
-      $('brush').innerHTML = `<span class="cat-ic">${icon(t.icon)}</span><span class="acc-title"><b>${t.name}</b><small>Map block · ${game.brushSize}×${game.brushSize} brush</small></span>`;
+      const how = t.group !== 'grid' ? 'Map block' : { x: 'Click an intersection', seg: 'Click a street', both: 'Click a street or intersection' }[t.piece];
+      $('brush').innerHTML = `<span class="cat-ic">${icon(t.icon)}</span><span class="acc-title"><b>${t.name}</b><small>${how} · ${game.brushSize}×${game.brushSize} brush</small></span>`;
       return;
     }
     const s = STYLES[game.styleId], p = s.variants[game.variant], m = MODULES[game.moduleId];
@@ -257,7 +258,7 @@ export function initUI(game, A) {
     renderDecor();
     renderMap();
     document.querySelectorAll('[data-brush]').forEach((b) => b.classList.toggle('on', +b.dataset.brush === game.brushSize));
-    const fillLabels = game.brush === 'decor' ? ['Wall', 'Floor', 'Building'] : ['Single', 'Plot', 'Block'];
+    const fillLabels = game.brush === 'decor' ? ['Wall', 'Floor', 'Building', 'Line', 'Area'] : ['Single', 'Plot', 'Block', 'Line', 'Area'];
     document.querySelectorAll('[data-fill]').forEach((b, i) => { b.textContent = fillLabels[i]; b.classList.toggle('on', (b.dataset.fill || null) === game.fill); });
     $('v-cut').classList.toggle('on', game.cutaway);
     $('v-ug').classList.toggle('on', game.underground);
